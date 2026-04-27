@@ -8,7 +8,7 @@ const (
 	StatusSubmitted            ApplicationStatus = "submitted"
 	StatusCreditCheckPending   ApplicationStatus = "credit_check_pending"
 	StatusOfferReserved        ApplicationStatus = "offer_reserved"
-	StatusFulfilled            ApplicationStatus = "fulfilled"
+	StatusCompleted            ApplicationStatus = "completed"
 	StatusRejected             ApplicationStatus = "rejected"
 	StatusCompensationRequired ApplicationStatus = "compensation_required"
 	StatusCompensated          ApplicationStatus = "compensated"
