@@ -1,29 +1,37 @@
 services:
-  ########################
-  # Third-party services #
-  ########################
-  gobblr:
-    image: ghcr.io/mrsimonemms/gobblr
+  worker:
+    build:
+      context: .
+      dockerfile: ./apps/golang.Dockerfile
+      target: dev
+      args:
+        APP: worker
     environment:
-      GOBBLR_DATABASE: app
-      GOBBLR_HOST: mysql
-      GOBBLR_PASSWORD: password
-      GOBBLR_USERNAME: app
+      LOG_LEVEL: debug
+      TEMPORAL_ADDRESS: temporal:7233
     ports:
-      - 4001:5670
-    links:
-      - mysql
+      - 9000:9000
     volumes:
-      - ./dev/data:/app/data
-    restart: on-failure
-    command: db sql mysql --run
+      - ./apps/worker:/go/root/apps/worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9000/health || exit 1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 3
 
-  mysql:
-    image: mysql:8
-    environment:
-      MYSQL_DATABASE: app
-      MYSQL_RANDOM_ROOT_PASSWORD: "true"
-      MYSQL_PASSWORD: password
-      MYSQL_USER: app
+  #####################
+  # External services #
+  #####################
+  temporal:
+    image: temporalio/temporal
     ports:
-      - 4000:3306
+      - 8233:8233
+    command: server start-dev --ip 0.0.0.0
+    healthcheck:
+      test: [ "CMD-SHELL", "temporal operator cluster health" ]
+      interval: 10s
+      timeout: 10s
+      retries: 3
