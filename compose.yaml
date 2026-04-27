@@ -1,4 +1,28 @@
 services:
+  api:
+    build:
+      context: .
+      dockerfile: ./apps/node.Dockerfile
+      target: dev
+      args:
+        APP: api
+    environment:
+      LOG_LEVEL: verbose
+      PORT: 9000
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - 9000:9000
+    volumes:
+      - ./apps/api:/home/node/root/apps/api
+    depends_on:
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9000/health || exit 1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+
   worker:
     build:
       context: .
@@ -9,8 +33,6 @@ services:
     environment:
       LOG_LEVEL: debug
       TEMPORAL_ADDRESS: temporal:7233
-    ports:
-      - 9000:9000
     volumes:
       - ./apps/worker:/go/root/apps/worker
     depends_on:

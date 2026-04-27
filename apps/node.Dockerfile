@@ -31,7 +31,9 @@ ARG VERSION
 WORKDIR /opt/app
 ENV GIT_COMMIT="${GIT_COMMIT}"
 ENV VERSION="${VERSION}"
-ENV SERVER_PORT=3000
+ENV PORT=3000
+ENV LOGGER_COLORS_ENABLED=false
+ENV LOGGER_JSON_ENABLED=true
 COPY --from=builder /home/node/root/apps/$APP/dist dist
 COPY --from=builder /home/node/root/apps/$APP/node_modules node_modules
 COPY --from=builder /home/node/root/apps/$APP/package.json package.json

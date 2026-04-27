@@ -24,5 +24,10 @@
   },
   "containerEnv": {
     "GIT_REPO": "github.com/mrsimonemms/mortgage-application"
-  }
+  },
+  "forwardPorts": [
+    8233,
+    9000,
+    9999
+  ]
 }
