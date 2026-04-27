@@ -1,4 +1,5 @@
 import { Controller, Get, Inject, VERSION_NEUTRAL } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger/dist/decorators/api-use-tags.decorator';
 import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
 
 import { TemporalService } from '../temporal/temporal.service';
@@ -7,6 +8,7 @@ import { TemporalService } from '../temporal/temporal.service';
   path: 'health',
   version: VERSION_NEUTRAL,
 })
+@ApiTags('Health')
 export class HealthController {
   @Inject(HealthCheckService)
   private readonly health: HealthCheckService;

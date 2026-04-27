@@ -11,6 +11,7 @@ import {
   FastifyAdapter,
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 import { AppModule } from './app.module';
 import loggerConfig from './config/logger';
@@ -39,6 +40,18 @@ async function bootstrap() {
       }),
     )
     .useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
+
+  const docBuilderConfig = new DocumentBuilder()
+    .setTitle('Mortgage Application API')
+    .setDescription(
+      'Temporal-backed API for the mortgage application orchestration PoC.',
+    )
+    .setVersion(process.env.npm_package_version ?? 'dev')
+    .build();
+
+  const documentFactory = SwaggerModule.createDocument(app, docBuilderConfig);
+
+  SwaggerModule.setup('api', app, documentFactory);
 
   await app.listen(
     config.getOrThrow<number>('server.port'),
