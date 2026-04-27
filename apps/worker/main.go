@@ -6,12 +6,14 @@ import (
 
 	gh "github.com/mrsimonemms/golang-helpers"
 	"github.com/mrsimonemms/golang-helpers/temporal"
+	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage"
+	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage/activities"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/worker"
 )
 
 const (
-	TaskQueue = "hello-world"
+	TaskQueue = "mortgage-application"
 )
 
 func exec() error {
@@ -29,6 +31,9 @@ func exec() error {
 	defer c.Close()
 
 	w := worker.New(c, TaskQueue, worker.Options{})
+
+	w.RegisterWorkflow(mortgage.MortgageApplicationWorkflow)
+	w.RegisterActivity(&activities.Activities{})
 
 	// Start the healthcheck server in a separate goroutine
 	temporal.NewHealthCheck(context.Background(), []string{TaskQueue}, "0.0.0.0:9000", c)
