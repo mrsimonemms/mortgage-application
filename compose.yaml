@@ -23,6 +23,31 @@ services:
       timeout: 10s
       retries: 3
 
+  ui:
+    build:
+      context: .
+      dockerfile: ./apps/node.Dockerfile
+      target: dev
+      args:
+        APP: ui
+    environment:
+      LOG_LEVEL: debug
+      PORT: 9999
+    ports:
+      - 9999:9999
+    volumes:
+      - ./apps/ui:/home/node/root/apps/ui
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9999 || exit 1" ]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+
   worker:
     build:
       context: .
