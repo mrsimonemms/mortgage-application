@@ -589,6 +589,31 @@ If pre-commit is not installed, install it:
 
 ---
 
+## Formatting (API - NestJS)
+
+The API (`apps/api`) uses Prettier via `npm run format`.
+
+When making changes to any files under `apps/api`, Claude must:
+
+- Run formatting before running pre-commit:
+  - `cd apps/api && npm run format && npm run lint`
+- Ensure formatting changes are applied before final validation
+- Then run:
+  - `pre-commit run --all-files`
+
+This ensures:
+- consistent formatting in TypeScript code
+- minimal noise in diffs
+- pre-commit checks run on already-formatted files
+
+Do not:
+- skip formatting for small changes
+- rely on pre-commit to fix formatting after the fact
+
+Formatting is part of the definition of done for API changes.
+
+---
+
 ### Expectations by area
 
 #### Go (worker)

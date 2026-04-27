@@ -1,0 +1,108 @@
+import {
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Client } from '@temporalio/client';
+import * as proto from '@temporalio/proto';
+
+import { WORKFLOW_CLIENT } from '../temporal/temporal.providers';
+import { CreditCheckResult } from './events/credit-check.event';
+import { MortgageApplication } from './models/mortgage-application.model';
+
+// The workflow type name is the short function name that the Temporal Go SDK
+// derives from runtime.FuncForPC. It must match the Go worker registration.
+const WORKFLOW_TYPE = 'MortgageApplicationWorkflow';
+const TASK_QUEUE = 'mortgage-application';
+const SIGNAL_CREDIT_CHECK_COMPLETED = 'credit-check-completed';
+const QUERY_GET_APPLICATION = 'getApplication';
+
+@Injectable()
+export class MortgageService {
+  protected readonly logger = new Logger(this.constructor.name);
+
+  constructor(@Inject(WORKFLOW_CLIENT) private readonly client: Client) {}
+
+  workflowId(applicationId: string): string {
+    return `mortgage-application-${applicationId}`;
+  }
+
+  async completeCreditCheck(
+    applicationId: string,
+    result: CreditCheckResult,
+    reference?: string,
+  ): Promise<void> {
+    if (!(await this.isWorkflowRunning(this.workflowId(applicationId)))) {
+      throw new NotFoundException(`Application ${applicationId} not found`);
+    }
+
+    const handle = this.client.workflow.getHandle(
+      this.workflowId(applicationId),
+    );
+    await handle.signal(SIGNAL_CREDIT_CHECK_COMPLETED, {
+      applicationId,
+      result,
+      ...(reference !== undefined && { reference }),
+    });
+  }
+
+  async getApplication(applicationId: string): Promise<MortgageApplication> {
+    if (!(await this.isWorkflowRunning(this.workflowId(applicationId)))) {
+      throw new NotFoundException(`Application ${applicationId} not found`);
+    }
+
+    const handle = this.client.workflow.getHandle(
+      this.workflowId(applicationId),
+    );
+    return handle.query<MortgageApplication>(QUERY_GET_APPLICATION);
+  }
+
+  async isWorkflowRunning(workflowId: string): Promise<boolean> {
+    this.logger.debug({ workflowId }, 'Checking if workflow is running');
+
+    try {
+      const desc = await this.client.workflow.getHandle(workflowId).describe();
+      return (
+        desc.status.code ===
+        proto.temporal.api.enums.v1.WorkflowExecutionStatus
+          .WORKFLOW_EXECUTION_STATUS_RUNNING
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  async startApplication(
+    applicationId: string,
+    applicantName: string,
+  ): Promise<{ workflowId: string; applicationId: string }> {
+    const workflowId = this.workflowId(applicationId);
+
+    if (await this.isWorkflowRunning(workflowId)) {
+      throw new ConflictException(
+        `Workflow already exists for applicationId: ${applicationId}`,
+      );
+    }
+
+    this.logger.log(
+      { workflowId, applicationId },
+      'Starting mortgage application workflow',
+    );
+
+    await this.client.workflow.start(WORKFLOW_TYPE, {
+      taskQueue: TASK_QUEUE,
+      workflowId,
+      args: [
+        {
+          applicationId,
+          applicantName,
+          submittedAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    return { workflowId, applicationId };
+  }
+}

@@ -5,7 +5,10 @@ import { registerAs } from '@nestjs/config';
 export const LOG_LEVEL_SILENT = 'silent';
 
 function generateLogLevels(): LogLevel[] {
-  const currentLevel = process.env.LOG_LEVEL ?? 'log';
+  let currentLevel = process.env.LOG_LEVEL ?? 'log';
+  if (currentLevel === 'info') {
+    currentLevel = 'log';
+  }
   let enabled = false;
 
   const levels: LogLevel[] = [
