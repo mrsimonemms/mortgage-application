@@ -6,7 +6,6 @@ import (
 
 	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage/activities"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -47,11 +46,17 @@ func TestMortgageApplicationWorkflow_HappyPath(t *testing.T) {
 
 	// Fatal preconditions: if the workflow did not complete cleanly we cannot
 	// safely inspect the result.
-	require.True(t, env.IsWorkflowCompleted(), "workflow should have completed")
-	require.NoError(t, env.GetWorkflowError())
+	if !assert.True(t, env.IsWorkflowCompleted(), "workflow should have completed") {
+		return
+	}
+	if !assert.NoError(t, env.GetWorkflowError()) {
+		return
+	}
 
 	var result MortgageApplication
-	require.NoError(t, env.GetWorkflowResult(&result))
+	if !assert.NoError(t, env.GetWorkflowResult(&result)) {
+		return
+	}
 
 	// Final application state.
 	assert.Equal(t, StatusCompleted, result.Status)
