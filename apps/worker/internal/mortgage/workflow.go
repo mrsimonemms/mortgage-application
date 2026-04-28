@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage/activities"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -81,7 +82,7 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		return app, err
 	}
 
-	if err := runCompleteApplication(ctx, actCtx, &app, acts); err != nil {
+	if err := runCompleteApplication(ctx, &app, acts, event.Scenario == ScenarioFailAfterOfferReservation); err != nil {
 		return app, err
 	}
 
@@ -163,7 +164,21 @@ func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication,
 	return nil
 }
 
-func runCompleteApplication(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
+func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, simulateFailure bool) error {
+	// The completion step uses its own activity options so that the retry policy
+	// is scoped to this step only. Under the fail_after_offer_reservation scenario
+	// the activity fails on attempts 1–4 and Temporal retries with exponential backoff
+	// before the fifth attempt succeeds.
+	completeActCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    time.Second,
+			BackoffCoefficient: 2.0,
+			MaximumAttempts:    5,
+			MaximumInterval:    10 * time.Second,
+		},
+	})
+
 	app.CurrentStep = "fulfilment"
 	recordTimeline(app, ctx, "fulfilment", TimelineStarted, "Fulfilment started", map[string]string{
 		"offerId": app.OfferID,
@@ -171,9 +186,10 @@ func runCompleteApplication(ctx, actCtx workflow.Context, app *MortgageApplicati
 	upsertSearchAttributes(ctx, app, false)
 
 	var result activities.CompleteApplicationResult
-	if err := workflow.ExecuteActivity(actCtx, acts.CompleteApplication, activities.CompleteApplicationInput{
-		ApplicationID: app.ApplicationID,
-		OfferID:       app.OfferID,
+	if err := workflow.ExecuteActivity(completeActCtx, acts.CompleteApplication, activities.CompleteApplicationInput{
+		ApplicationID:   app.ApplicationID,
+		OfferID:         app.OfferID,
+		SimulateFailure: simulateFailure,
 	}).Get(ctx, &result); err != nil {
 		return err
 	}

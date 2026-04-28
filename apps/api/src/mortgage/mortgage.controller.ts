@@ -35,6 +35,7 @@ export class MortgageController {
     return this.mortgageService.startApplication(
       dto.applicationId,
       dto.applicantName,
+      dto.scenario,
     );
   }
 

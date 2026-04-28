@@ -267,6 +267,57 @@ func TestMortgageApplicationWorkflow_RejectedCreditCheck(t *testing.T) {
 	assert.Equal(t, "REF-REJECTED", rejection.Metadata["reference"])
 }
 
+// TestMortgageApplicationWorkflow_RetryAndSucceed verifies the fail_after_offer_reservation
+// scenario. CompleteApplication is invoked with SimulateFailure set, which makes the
+// activity fail on attempts 1–4 and succeed on attempt 5. Temporal drives the retries
+// automatically with exponential backoff. No error is swallowed in workflow code: if all
+// retries were exhausted the error would propagate normally. The workflow must complete
+// successfully with StatusCompleted after the fifth attempt succeeds.
+func TestMortgageApplicationWorkflow_RetryAndSucceed(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		Scenario:      ScenarioFailAfterOfferReservation,
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError(), "workflow must complete without error after retries succeed")
+
+	var result MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&result))
+
+	assert.Equal(t, StatusCompleted, result.Status)
+	assert.Equal(t, "completed", result.CurrentStep)
+	assert.NotEmpty(t, result.OfferID, "offerId must remain present")
+
+	byKey := make(map[string]TimelineEntry, len(result.Timeline))
+	for _, e := range result.Timeline {
+		byKey[e.Step+"/"+string(e.Status)] = e
+	}
+
+	_, hasStarted := byKey["fulfilment/started"]
+	assert.True(t, hasStarted, "audit trail must include fulfilment/started")
+
+	_, hasCompleted := byKey["fulfilment/completed"]
+	assert.True(t, hasCompleted, "audit trail must include fulfilment/completed after successful retry")
+}
+
 // TestSearchAttributeKeys_Names verifies that the search attribute key names match
 // the strings that must be registered with the Temporal server.
 func TestSearchAttributeKeys_Names(t *testing.T) {
