@@ -220,6 +220,77 @@ A reader should be able to understand:
 
 ---
 
+## Resilience and demonstration intent
+
+This PoC is for a bank audience and should demonstrate production-grade thinking
+about failure, recovery, and durability. Resilience is not a secondary concern.
+
+### Default expectations
+
+Workflows should succeed wherever reasonably possible. The happy path is the
+primary demo scenario and must be reliable.
+
+Failures are expected events, not exceptional ones. The system should handle them
+gracefully and recover without manual intervention where Temporal makes that
+possible.
+
+### Use real Temporal mechanisms
+
+When demonstrating resilience, use Temporal's actual capabilities, not simulated
+outcomes in workflow control flow.
+
+Prefer:
+- Real activity execution, not conditional branches that skip the activity
+- Real activity failures using `temporal.NewApplicationError` or
+  `temporal.NewNonRetryableApplicationError`, not error returns from workflow code
+- Temporal-managed retries via `RetryPolicy`, not manual retry loops
+- Compensation via a real compensating activity, not a status flag set in the
+  workflow without executing the reverse operation
+
+Avoid:
+- Simulating failure outcomes by branching in workflow code before calling the
+  activity
+- Returning a synthetic error from workflow code to mimic an activity failure
+- Treating failure injection as a workflow-level conditional, rather than as
+  activity-level behaviour
+
+### Why this matters
+
+Temporal's value proposition is that it durably manages execution, retries, and
+state across failures. Demonstrating failure injection inside workflow control
+flow misrepresents this. A viewer would reasonably conclude that Temporal requires
+the developer to manage retry logic manually.
+
+The correct pattern is: the activity fails, Temporal retries it, the workflow
+sees the final result. The workflow should not need to know how many attempts were
+made.
+
+### Retry and compensation rules
+
+- Configure `RetryPolicy` on the activity options, not in the workflow logic.
+- Use `MaximumAttempts` to bound retries for demo predictability.
+- If an activity is non-retryable, use `NewNonRetryableApplicationError` in the
+  activity itself, not a workflow-level branch.
+- If compensation is required after a failure, execute the compensating activity.
+  Do not just update the workflow status without performing the reverse operation.
+
+### Failure injection in demo scenarios
+
+Controlled failure injection for demo purposes is acceptable and expected.
+
+When implementing a failure scenario:
+- Put the failure logic in the activity, keyed on the attempt count or an input
+  flag passed from the workflow.
+- Make the failure obvious and intentional. Add a log line that names the
+  scenario.
+- Prefer attempt-based failure (fail on attempts 1 to N, succeed on attempt N+1)
+  over a permanent failure scenario, unless the scenario is specifically about
+  compensation or rejection.
+
+Do not hide failure injection behind opaque helpers or framework abstractions.
+
+---
+
 ## Activity design rules
 
 Activities model external work.
