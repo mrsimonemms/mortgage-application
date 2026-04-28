@@ -5,7 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Client } from '@temporalio/client';
+import { Client, WorkflowNotFoundError } from '@temporalio/client';
 import * as proto from '@temporalio/proto';
 
 import { WORKFLOW_CLIENT } from '../temporal/temporal.providers';
@@ -49,14 +49,17 @@ export class MortgageService {
   }
 
   async getApplication(applicationId: string): Promise<MortgageApplication> {
-    if (!(await this.isWorkflowRunning(this.workflowId(applicationId)))) {
-      throw new NotFoundException(`Application ${applicationId} not found`);
-    }
-
     const handle = this.client.workflow.getHandle(
       this.workflowId(applicationId),
     );
-    return handle.query<MortgageApplication>(QUERY_GET_APPLICATION);
+    try {
+      return await handle.query<MortgageApplication>(QUERY_GET_APPLICATION);
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) {
+        throw new NotFoundException(`Application ${applicationId} not found`);
+      }
+      throw err;
+    }
   }
 
   async isWorkflowRunning(workflowId: string): Promise<boolean> {
@@ -74,13 +77,24 @@ export class MortgageService {
     }
   }
 
+  async workflowExists(workflowId: string): Promise<boolean> {
+    this.logger.debug({ workflowId }, 'Checking if workflow exists');
+
+    try {
+      await this.client.workflow.getHandle(workflowId).describe();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async startApplication(
     applicationId: string,
     applicantName: string,
   ): Promise<{ workflowId: string; applicationId: string }> {
     const workflowId = this.workflowId(applicationId);
 
-    if (await this.isWorkflowRunning(workflowId)) {
+    if (await this.workflowExists(workflowId)) {
       throw new ConflictException(
         `Workflow already exists for applicationId: ${applicationId}`,
       );
