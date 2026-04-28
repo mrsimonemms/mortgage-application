@@ -174,6 +174,99 @@ func TestMortgageApplicationWorkflow_AuditTrail(t *testing.T) {
 	}
 }
 
+// TestMortgageApplicationWorkflow_QueryWhileWaiting queries the workflow mid-flight
+// while it is blocked on the credit bureau signal. The response must show the
+// awaiting_credit_result step and include a credit_check/waiting timeline entry.
+func TestMortgageApplicationWorkflow_QueryWhileWaiting(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow(QueryApplication)
+		assert.NoError(t, err)
+
+		var app MortgageApplication
+		assert.NoError(t, val.Get(&app))
+
+		assert.Equal(t, "awaiting_credit_result", app.CurrentStep)
+		assert.Equal(t, StatusCreditCheckPending, app.Status)
+
+		var found bool
+		for _, e := range app.Timeline {
+			if e.Step == "credit_check" && e.Status == TimelineWaiting {
+				found = true
+			}
+		}
+		assert.True(t, found, "timeline should include credit_check/waiting entry while blocked")
+
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+}
+
+// TestMortgageApplicationWorkflow_RejectedCreditCheck confirms the final state and
+// timeline when the credit bureau returns a rejected result.
+func TestMortgageApplicationWorkflow_RejectedCreditCheck(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckRejected,
+			Reference:     "REF-REJECTED",
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var result MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&result))
+
+	assert.Equal(t, StatusRejected, result.Status)
+	assert.Equal(t, "rejected", result.CurrentStep)
+	assert.Empty(t, result.OfferID)
+
+	byKey := make(map[string]TimelineEntry, len(result.Timeline))
+	for _, e := range result.Timeline {
+		byKey[e.Step+"/"+string(e.Status)] = e
+	}
+
+	rejection, ok := byKey["credit_check/completed"]
+	assert.True(t, ok, "expected credit_check/completed entry in timeline")
+	assert.Equal(t, "Credit check rejected", rejection.Details)
+	assert.Equal(t, "rejected", rejection.Metadata["result"])
+	assert.Equal(t, "REF-REJECTED", rejection.Metadata["reference"])
+}
+
 // TestSearchAttributeKeys_Names verifies that the search attribute key names match
 // the strings that must be registered with the Temporal server.
 func TestSearchAttributeKeys_Names(t *testing.T) {

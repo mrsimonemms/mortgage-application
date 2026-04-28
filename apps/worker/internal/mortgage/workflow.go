@@ -26,8 +26,12 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		Timeline:      []TimelineEntry{},
 	}
 
+	// The query handler returns a snapshot with an independent copy of the timeline
+	// so callers cannot observe future mutations to the workflow's slice.
 	if err := workflow.SetQueryHandler(ctx, QueryApplication, func() (MortgageApplication, error) {
-		return app, nil
+		snapshot := app
+		snapshot.Timeline = append([]TimelineEntry(nil), app.Timeline...)
+		return snapshot, nil
 	}); err != nil {
 		return app, err
 	}
