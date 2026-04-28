@@ -2,10 +2,23 @@ package mortgage
 
 import "time"
 
+// WorkflowScenario controls which demo path the workflow executes.
+type WorkflowScenario string
+
+const (
+	// ScenarioHappyPath runs the full successful mortgage workflow.
+	ScenarioHappyPath WorkflowScenario = "happy_path"
+	// ScenarioFailAfterOfferReservation reserves an offer then deliberately
+	// fails at the completion stage, leaving the workflow in
+	// StatusCompensationRequired for the compensation demo.
+	ScenarioFailAfterOfferReservation WorkflowScenario = "fail_after_offer_reservation"
+)
+
 type MortgageApplicationSubmitted struct {
-	ApplicationID string    `json:"applicationId"`
-	ApplicantName string    `json:"applicantName"`
-	SubmittedAt   time.Time `json:"submittedAt"`
+	ApplicationID string           `json:"applicationId"`
+	ApplicantName string           `json:"applicantName"`
+	SubmittedAt   time.Time        `json:"submittedAt"`
+	Scenario      WorkflowScenario `json:"scenario,omitempty"`
 }
 
 type CreditCheckResult string

@@ -66,6 +66,53 @@ describe('MortgageService', () => {
       });
     });
 
+    it('sends happy_path scenario when no scenario is specified', async () => {
+      mockHandle.describe.mockRejectedValue(new Error('not found'));
+
+      await service.startApplication('app-123', 'John Smith');
+
+      expect(mockWorkflowClient.workflow.start).toHaveBeenCalledWith(
+        'MortgageApplicationWorkflow',
+        expect.objectContaining({
+          args: [expect.objectContaining({ scenario: 'happy_path' })],
+        }),
+      );
+    });
+
+    it('sends happy_path scenario when happy_path is specified', async () => {
+      mockHandle.describe.mockRejectedValue(new Error('not found'));
+
+      await service.startApplication('app-123', 'John Smith', 'happy_path');
+
+      expect(mockWorkflowClient.workflow.start).toHaveBeenCalledWith(
+        'MortgageApplicationWorkflow',
+        expect.objectContaining({
+          args: [expect.objectContaining({ scenario: 'happy_path' })],
+        }),
+      );
+    });
+
+    it('sends fail_after_offer_reservation scenario when specified', async () => {
+      mockHandle.describe.mockRejectedValue(new Error('not found'));
+
+      await service.startApplication(
+        'app-123',
+        'John Smith',
+        'fail_after_offer_reservation',
+      );
+
+      expect(mockWorkflowClient.workflow.start).toHaveBeenCalledWith(
+        'MortgageApplicationWorkflow',
+        expect.objectContaining({
+          args: [
+            expect.objectContaining({
+              scenario: 'fail_after_offer_reservation',
+            }),
+          ],
+        }),
+      );
+    });
+
     it('throws ConflictException when a workflow is already running', async () => {
       // default: mockHandle.describe resolves with STATUS_RUNNING
       await expect(

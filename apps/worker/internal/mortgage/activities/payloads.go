@@ -43,6 +43,10 @@ type ReserveOfferResult struct {
 type CompleteApplicationInput struct {
 	ApplicationID string `json:"applicationId"`
 	OfferID       string `json:"offerId"`
+	// SimulateFailure causes the activity to fail on the first four attempts and
+	// succeed on the fifth, demonstrating Temporal's automatic retry behaviour.
+	// Used for the fail_after_offer_reservation demo scenario only.
+	SimulateFailure bool `json:"simulateFailure,omitempty"`
 }
 
 type CompleteApplicationResult struct {

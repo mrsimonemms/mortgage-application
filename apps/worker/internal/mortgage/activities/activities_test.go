@@ -1,10 +1,12 @@
 package activities
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -133,18 +135,39 @@ func TestReserveOffer(t *testing.T) {
 }
 
 func TestCompleteApplication(t *testing.T) {
-	env := newTestEnv(t)
+	t.Run("succeeds on the happy path", func(t *testing.T) {
+		env := newTestEnv(t)
 
-	val, err := env.ExecuteActivity(Activities{}.CompleteApplication, CompleteApplicationInput{
-		ApplicationID: "APP-001",
-		OfferID:       "OFFER-APP-001",
+		val, err := env.ExecuteActivity(Activities{}.CompleteApplication, CompleteApplicationInput{
+			ApplicationID: "APP-001",
+			OfferID:       "OFFER-APP-001",
+		})
+
+		assert.NoError(t, err)
+		var result CompleteApplicationResult
+		assert.NoError(t, val.Get(&result))
+		assert.Equal(t, "APP-001", result.ApplicationID)
+		assert.False(t, result.CompletedAt.IsZero())
 	})
 
-	assert.NoError(t, err)
-	var result CompleteApplicationResult
-	assert.NoError(t, val.Get(&result))
-	assert.Equal(t, "APP-001", result.ApplicationID)
-	assert.False(t, result.CompletedAt.IsZero())
+	t.Run("fails with a retryable error on early attempts when SimulateFailure is set", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		_, err := env.ExecuteActivity(Activities{}.CompleteApplication, CompleteApplicationInput{
+			ApplicationID:   "APP-001",
+			OfferID:         "OFFER-APP-001",
+			SimulateFailure: true,
+		})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "completion failure injected for demo")
+
+		// The error must be retryable so Temporal drives the backoff automatically.
+		var appErr *temporal.ApplicationError
+		errors.As(err, &appErr)
+		assert.NotNil(t, appErr, "error must be a temporal.ApplicationError")
+		assert.False(t, appErr.NonRetryable(), "error must be retryable so Temporal retries the activity")
+	})
 }
 
 func TestReleaseOffer(t *testing.T) {
