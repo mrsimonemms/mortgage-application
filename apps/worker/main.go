@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	gh "github.com/mrsimonemms/golang-helpers"
 	"github.com/mrsimonemms/golang-helpers/temporal"
 	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage"
 	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage/activities"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/worker"
 )
@@ -17,6 +19,17 @@ const (
 )
 
 func exec() error {
+	logLevel := "info"
+	if l, ok := os.LookupEnv("LOG_LEVEL"); ok {
+		logLevel = l
+	}
+	fmt.Println(logLevel)
+	level, err := zerolog.ParseLevel(logLevel)
+	if err != nil {
+		return err
+	}
+	zerolog.SetGlobalLevel(level)
+
 	// The client is a heavyweight object that should be created once per process.
 	c, err := temporal.NewConnectionWithEnvvars(
 		temporal.WithZerolog(&log.Logger),
