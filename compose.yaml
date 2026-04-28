@@ -76,7 +76,11 @@ services:
     image: temporalio/temporal
     ports:
       - 8233:8233
-    command: server start-dev --ip 0.0.0.0
+    # command: server start-dev --ip 0.0.0.0
+    command: >
+      server start-dev --ip 0.0.0.0 --search-attribute ApplicationStatus=Keyword
+      --search-attribute CurrentStep=Keyword --search-attribute HasOffer=Bool
+      --search-attribute AwaitingExternalSignal=Bool
     healthcheck:
       test: [ "CMD-SHELL", "temporal operator cluster health" ]
       interval: 10s
