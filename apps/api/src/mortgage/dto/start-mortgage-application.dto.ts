@@ -26,10 +26,10 @@ export class StartMortgageApplicationDto {
   @ApiPropertyOptional({
     description:
       'Demo scenario to run. Defaults to happy_path when omitted. Use fail_after_offer_reservation to trigger a deliberate completion failure after offer reservation.',
-    enum: MORTGAGE_SCENARIOS,
+    enum: MORTGAGE_SCENARIOS.map((s) => s.name),
     example: 'happy_path',
   })
   @IsOptional()
-  @IsIn(MORTGAGE_SCENARIOS)
+  @IsIn(MORTGAGE_SCENARIOS.map((s) => s.name))
   scenario?: MortgageScenario;
 }
