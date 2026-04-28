@@ -318,6 +318,91 @@ func TestMortgageApplicationWorkflow_RetryAndSucceed(t *testing.T) {
 	assert.True(t, hasCompleted, "audit trail must include fulfilment/completed after successful retry")
 }
 
+// TestMortgageApplicationWorkflow_Compensation verifies the
+// fail_and_compensate_after_offer_reservation scenario following the saga pattern.
+//
+// Saga behaviour under test:
+//   - Offer reservation succeeds; compensation is registered immediately.
+//   - CompleteApplication fails on all 3 retry attempts (retries exhausted).
+//   - The workflow records the failure, then the deferred compensator runs
+//     ReleaseOffer from a disconnected context.
+//   - The workflow returns a non-nil error (the business transaction failed).
+//   - The final application state — accessible via the query handler — reflects
+//     the compensated terminal state: StatusCompensated, OfferID cleared.
+func TestMortgageApplicationWorkflow_Compensation(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		Scenario:      ScenarioFailAndCompensate,
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	// The workflow must return an error: compensation does not convert the failure
+	// into a success. The business transaction failed; the saga cleaned up.
+	assert.Error(t, env.GetWorkflowError(), "workflow must return an error after compensation")
+
+	// The query handler is still accessible after workflow completion. It returns
+	// the state as it was when the workflow last mutated app — i.e. after the
+	// deferred compensator updated Status, CurrentStep and OfferID.
+	val, queryErr := env.QueryWorkflow(QueryApplication)
+	assert.NoError(t, queryErr, "query must succeed even after workflow failure")
+
+	var result MortgageApplication
+	assert.NoError(t, val.Get(&result))
+
+	assert.Equal(t, StatusCompensated, result.Status)
+	assert.Equal(t, "compensated", result.CurrentStep)
+	assert.Empty(t, result.OfferID, "offerId must be cleared once the offer is released")
+
+	byKey := make(map[string]TimelineEntry, len(result.Timeline))
+	for _, e := range result.Timeline {
+		byKey[e.Step+"/"+string(e.Status)] = e
+	}
+
+	// Offer reservation must succeed before the failure.
+	offerReserved, ok := byKey["offer_reservation/completed"]
+	assert.True(t, ok, "audit trail must include offer_reservation/completed")
+	assert.Equal(t, "OFFER-"+testApplicationID, offerReserved.Metadata["offerId"])
+
+	// Fulfilment must be attempted and recorded as started before failing.
+	fulfilmentStarted, ok := byKey["fulfilment/started"]
+	assert.True(t, ok, "audit trail must include fulfilment/started")
+	assert.Equal(t, "OFFER-"+testApplicationID, fulfilmentStarted.Metadata["offerId"])
+
+	// Fulfilment failure must appear in the timeline before compensation entries.
+	fulfilmentFailed, ok := byKey["fulfilment/failed"]
+	assert.True(t, ok, "audit trail must include fulfilment/failed after retry exhaustion")
+	assert.Equal(t, "OFFER-"+testApplicationID, fulfilmentFailed.Metadata["offerId"])
+	assert.Equal(t, "Maximum retry attempts exhausted", fulfilmentFailed.Metadata["reason"])
+
+	// Compensation must be recorded as started with the offer ID.
+	compStarted, ok := byKey["compensation/started"]
+	assert.True(t, ok, "audit trail must include compensation/started")
+	assert.Equal(t, "OFFER-"+testApplicationID, compStarted.Metadata["offerId"])
+
+	// Compensation must complete and record the terminal state.
+	compCompleted, ok := byKey["compensation/completed"]
+	assert.True(t, ok, "audit trail must include compensation/completed")
+	assert.Equal(t, "OFFER-"+testApplicationID, compCompleted.Metadata["offerId"])
+	assert.Equal(t, string(StatusCompensated), compCompleted.Metadata["status"])
+}
+
 // TestSearchAttributeKeys_Names verifies that the search attribute key names match
 // the strings that must be registered with the Temporal server.
 func TestSearchAttributeKeys_Names(t *testing.T) {
