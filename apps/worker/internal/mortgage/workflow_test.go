@@ -173,3 +173,23 @@ func TestMortgageApplicationWorkflow_AuditTrail(t *testing.T) {
 		})
 	}
 }
+
+// TestSearchAttributeKeys_Names verifies that the search attribute key names match
+// the strings that must be registered with the Temporal server.
+func TestSearchAttributeKeys_Names(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+	}{
+		{"ApplicationStatus", saApplicationStatus.GetName()},
+		{"CurrentStep", saCurrentStep.GetName()},
+		{"HasOffer", saHasOffer.GetName()},
+		{"AwaitingExternalSignal", saAwaitingExternalSignal.GetName()},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.name, tc.got)
+		})
+	}
+}
