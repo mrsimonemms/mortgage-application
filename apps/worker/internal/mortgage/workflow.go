@@ -3,21 +3,28 @@ package mortgage
 import (
 	"time"
 
+	saga "github.com/mrsimonemms/golang-helpers/temporal"
 	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage/activities"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
-// MortgageApplicationWorkflow orchestrates the full mortgage application happy path.
+// MortgageApplicationWorkflow orchestrates the full mortgage application.
 //
 // Steps:
-//  1. Intake - record receipt of the application
-//  2. Credit check request - dispatch to external bureau (activity)
-//  3. Durable wait - block until CreditCheckCompleted signal arrives (signal)
-//  4. Offer reservation - allocate a mortgage offer
-//  5. Complete application - mark the application as completed
-func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplicationSubmitted) (MortgageApplication, error) {
-	app := MortgageApplication{
+//  1. Intake — record receipt of the application
+//  2. Credit check request — dispatch to external bureau (activity)
+//  3. Durable wait — block until CreditCheckCompleted signal arrives (signal)
+//  4. Offer reservation — allocate a mortgage offer
+//  5. Complete application — mark the application as completed
+//
+// Saga pattern: a compensation function is registered immediately after the offer
+// reservation succeeds. If any later step fails and the workflow returns an error,
+// the deferred compensator releases the reserved offer from a disconnected context
+// and updates the audit trail. The workflow still returns the original error so the
+// business failure is correctly reflected in Temporal.
+func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplicationSubmitted) (app MortgageApplication, err error) {
+	app = MortgageApplication{
 		ApplicationID: event.ApplicationID,
 		ApplicantName: event.ApplicantName,
 		Status:        StatusSubmitted,
@@ -29,12 +36,12 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 
 	// The query handler returns a snapshot with an independent copy of the timeline
 	// so callers cannot observe future mutations to the workflow's slice.
-	if err := workflow.SetQueryHandler(ctx, QueryApplication, func() (MortgageApplication, error) {
+	if err = workflow.SetQueryHandler(ctx, QueryApplication, func() (MortgageApplication, error) {
 		snapshot := app
 		snapshot.Timeline = append([]TimelineEntry(nil), app.Timeline...)
 		return snapshot, nil
 	}); err != nil {
-		return app, err
+		return
 	}
 
 	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -43,18 +50,30 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 
 	acts := activities.Activities{}
 
+	// Compensation runs in LIFO order from a disconnected context whenever the
+	// workflow is returning a non-nil error and at least one step registered a
+	// compensation. The disconnected context ensures compensation activities are
+	// not cancelled along with the failing workflow.
+	var comp saga.Compensator
+	defer func() {
+		if err != nil {
+			disconnectedCtx, _ := workflow.NewDisconnectedContext(ctx)
+			comp.Compensate(disconnectedCtx)
+		}
+	}()
+
 	recordTimeline(&app, ctx, "submitted", TimelineCompleted, "Application received", map[string]string{
 		"applicationId": app.ApplicationID,
 		"applicantName": app.ApplicantName,
 	})
 	upsertSearchAttributes(ctx, &app, false)
 
-	if err := runIntake(ctx, actCtx, &app, acts); err != nil {
-		return app, err
+	if err = runIntake(ctx, actCtx, &app, acts); err != nil {
+		return
 	}
 
-	if err := requestCreditCheck(ctx, actCtx, &app, acts); err != nil {
-		return app, err
+	if err = requestCreditCheck(ctx, actCtx, &app, acts); err != nil {
+		return
 	}
 
 	creditResult := waitForCreditResult(ctx, &app)
@@ -68,8 +87,7 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		}
 		recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check rejected", meta)
 		upsertSearchAttributes(ctx, &app, false)
-
-		return app, nil
+		return // err is nil; deferred comp is a no-op
 	}
 
 	meta := map[string]string{"result": string(creditResult.Result)}
@@ -78,15 +96,35 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 	}
 	recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check approved", meta)
 
-	if err := runOfferReservation(ctx, actCtx, &app, acts); err != nil {
-		return app, err
+	if err = runOfferReservation(ctx, actCtx, &app, acts); err != nil {
+		return
 	}
 
-	if err := runCompleteApplication(ctx, &app, acts, event.Scenario == ScenarioFailAfterOfferReservation); err != nil {
-		return app, err
+	// Register compensation immediately after offer reservation succeeds.
+	// Inputs are captured by value now so the closure does not read app fields
+	// that may be mutated later (e.g. OfferID is cleared after compensation).
+	registeredAppID := app.ApplicationID
+	registeredOfferID := app.OfferID
+	comp.Add(func(compCtx workflow.Context) error {
+		return compensateReleaseOffer(compCtx, &app, acts, registeredAppID, registeredOfferID)
+	})
+
+	if err = runCompleteApplication(ctx, &app, acts, event.Scenario); err != nil {
+		// Record the failure before the deferred compensator runs so the audit
+		// trail shows the fulfilment failure ahead of the compensation entries.
+		recordTimeline(&app, ctx, "fulfilment", TimelineFailed,
+			"Fulfilment failed after maximum retries",
+			map[string]string{
+				"offerId": registeredOfferID,
+				"reason":  "Maximum retry attempts exhausted",
+			})
+		app.Status = StatusCompensationRequired
+		app.CurrentStep = "compensation"
+		upsertSearchAttributes(ctx, &app, false)
+		return // deferred compensator handles the release-offer step
 	}
 
-	return app, nil
+	return
 }
 
 func runIntake(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
@@ -164,19 +202,35 @@ func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication,
 	return nil
 }
 
-func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, simulateFailure bool) error {
-	// The completion step uses its own activity options so that the retry policy
-	// is scoped to this step only. Under the fail_after_offer_reservation scenario
-	// the activity fails on attempts 1–4 and Temporal retries with exponential backoff
-	// before the fifth attempt succeeds.
-	completeActCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+// runCompleteApplication executes the fulfilment step with scenario-specific retry
+// behaviour. The retry policy and SimulateFailure flag are scoped to this step only
+// so they do not affect any other activity in the workflow.
+//
+// fail_after_offer_reservation: fails on attempts 1–4, succeeds on attempt 5.
+// fail_and_compensate_after_offer_reservation: fails on all 3 attempts, exhausting
+// the retry policy. The caller is responsible for triggering compensation.
+func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, scenario WorkflowScenario) error {
+	retryPolicy := &temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2.0,
+		MaximumInterval:    10 * time.Second,
+		MaximumAttempts:    5,
+	}
+	simulateFailure := false
+
+	switch scenario {
+	case ScenarioFailAfterOfferReservation:
+		// Fails on attempts 1–4; succeeds on attempt 5.
+		simulateFailure = true
+	case ScenarioFailAndCompensate:
+		// Fails on all 3 attempts, surfacing an error to the workflow.
+		simulateFailure = true
+		retryPolicy.MaximumAttempts = 3
+	}
+
+	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy: &temporal.RetryPolicy{
-			InitialInterval:    time.Second,
-			BackoffCoefficient: 2.0,
-			MaximumAttempts:    5,
-			MaximumInterval:    10 * time.Second,
-		},
+		RetryPolicy:         retryPolicy,
 	})
 
 	app.CurrentStep = "fulfilment"
@@ -186,7 +240,7 @@ func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts
 	upsertSearchAttributes(ctx, app, false)
 
 	var result activities.CompleteApplicationResult
-	if err := workflow.ExecuteActivity(completeActCtx, acts.CompleteApplication, activities.CompleteApplicationInput{
+	if err := workflow.ExecuteActivity(actCtx, acts.CompleteApplication, activities.CompleteApplicationInput{
 		ApplicationID:   app.ApplicationID,
 		OfferID:         app.OfferID,
 		SimulateFailure: simulateFailure,
@@ -200,6 +254,40 @@ func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts
 		"offerId": app.OfferID,
 		"status":  string(StatusCompleted),
 	})
+	upsertSearchAttributes(ctx, app, false)
+
+	return nil
+}
+
+// compensateReleaseOffer is the compensation action for a successful offer reservation.
+// It runs from a disconnected context so it is not cancelled when the parent workflow
+// context is cancelled on failure. applicationID and offerID are passed explicitly
+// rather than read from app to ensure the correct values are used even if app is
+// mutated between registration and execution.
+func compensateReleaseOffer(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, applicationID, offerID string) error {
+	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+	})
+
+	recordTimeline(app, ctx, "compensation", TimelineStarted,
+		"Initiating compensation: releasing reserved offer",
+		map[string]string{"offerId": offerID})
+
+	var result activities.ReleaseOfferResult
+	if err := workflow.ExecuteActivity(actCtx, acts.ReleaseOffer, activities.ReleaseOfferInput{
+		ApplicationID: applicationID,
+		OfferID:       offerID,
+	}).Get(ctx, &result); err != nil {
+		return err
+	}
+
+	// Clear the offer ID: the offer is no longer reserved.
+	app.OfferID = ""
+	app.Status = StatusCompensated
+	app.CurrentStep = "compensated"
+	recordTimeline(app, ctx, "compensation", TimelineCompleted,
+		"Compensation complete: offer released",
+		map[string]string{"offerId": offerID, "status": string(StatusCompensated)})
 	upsertSearchAttributes(ctx, app, false)
 
 	return nil
