@@ -1,0 +1,8 @@
+# Example keys.yaml file for Temporal encryption service.
+
+# The key in position 0 is the key used for encryption
+- id: key0
+  key: A7fK9xQ2LmP4vZt8RjY6sWcH3bN5uE1G
+# Any later keys are old keys used only for decryption
+- id: key1
+  key: mD4R8vXk2Qp7ZcH9LwY6tS3bN1uE5FjA
