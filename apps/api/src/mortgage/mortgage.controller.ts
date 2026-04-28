@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBody,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -18,6 +19,10 @@ import {
 import { MORTGAGE_EXAMPLE_APPLICATION_ID } from './constants';
 import { CreditCheckDto } from './dto/credit-check.dto';
 import { StartMortgageApplicationDto } from './dto/start-mortgage-application.dto';
+import {
+  MORTGAGE_SCENARIOS,
+  MortgageScenarioOption,
+} from './models/mortgage-scenario.type';
 import { MortgageService } from './mortgage.service';
 
 @ApiTags('Applications')
@@ -37,6 +42,13 @@ export class MortgageController {
       dto.applicantName,
       dto.scenario,
     );
+  }
+
+  @Get('scenarios')
+  @ApiOperation({ summary: 'List available mortgage scenarios' })
+  @ApiOkResponse({ description: 'Available scenarios' })
+  getScenarios(): { scenarios: MortgageScenarioOption[] } {
+    return { scenarios: MORTGAGE_SCENARIOS };
   }
 
   @Get(':applicationId')
