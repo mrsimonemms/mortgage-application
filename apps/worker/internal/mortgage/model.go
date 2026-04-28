@@ -20,13 +20,18 @@ const (
 	TimelineStarted   TimelineStatus = "started"
 	TimelineCompleted TimelineStatus = "completed"
 	TimelineFailed    TimelineStatus = "failed"
+	TimelineWaiting   TimelineStatus = "waiting"
 )
 
+// TimelineEntry records a single transition in the mortgage application journey.
+// Details holds a human-readable description. Metadata holds structured key/value
+// data for the step (e.g. reference numbers, decision outcomes, IDs).
 type TimelineEntry struct {
-	Step      string         `json:"step"`
-	Status    TimelineStatus `json:"status"`
-	Timestamp time.Time      `json:"timestamp"`
-	Details   string         `json:"details,omitempty"`
+	Step      string            `json:"step"`
+	Status    TimelineStatus    `json:"status"`
+	Timestamp time.Time         `json:"timestamp"`
+	Details   string            `json:"details,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
 type MortgageApplication struct {

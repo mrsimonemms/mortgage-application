@@ -84,16 +84,16 @@ func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (Re
 }
 
 // CompleteApplication finalises the mortgage once an offer has been reserved.
-func (Activities) CompleteApplication(ctx context.Context, input FulfilmentInput) (FulfilmentResult, error) {
+func (Activities) CompleteApplication(ctx context.Context, input CompleteApplicationInput) (CompleteApplicationResult, error) {
 	logger := activity.GetLogger(ctx)
 
-	logger.Info("mortgage application fulfilled",
+	logger.Info("mortgage application completed",
 		"applicationId", input.ApplicationID,
 		"offerId", input.OfferID,
 	)
 
-	return FulfilmentResult{
+	return CompleteApplicationResult{
 		ApplicationID: input.ApplicationID,
-		FulfilledAt:   time.Now(),
+		CompletedAt:   time.Now(),
 	}, nil
 }

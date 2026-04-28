@@ -135,16 +135,16 @@ func TestReserveOffer(t *testing.T) {
 func TestCompleteApplication(t *testing.T) {
 	env := newTestEnv(t)
 
-	val, err := env.ExecuteActivity(Activities{}.CompleteApplication, FulfilmentInput{
+	val, err := env.ExecuteActivity(Activities{}.CompleteApplication, CompleteApplicationInput{
 		ApplicationID: "APP-001",
 		OfferID:       "OFFER-APP-001",
 	})
 
 	assert.NoError(t, err)
-	var result FulfilmentResult
+	var result CompleteApplicationResult
 	assert.NoError(t, val.Get(&result))
 	assert.Equal(t, "APP-001", result.ApplicationID)
-	assert.False(t, result.FulfilledAt.IsZero())
+	assert.False(t, result.CompletedAt.IsZero())
 }
 
 func TestReleaseOffer(t *testing.T) {
