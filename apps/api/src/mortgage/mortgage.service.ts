@@ -11,6 +11,7 @@ import * as proto from '@temporalio/proto';
 import { WORKFLOW_CLIENT } from '../temporal/temporal.providers';
 import { CreditCheckResult } from './events/credit-check.event';
 import { MortgageApplication } from './models/mortgage-application.model';
+import { MortgageScenario } from './models/mortgage-scenario.type';
 
 // The workflow type name is the short function name that the Temporal Go SDK
 // derives from runtime.FuncForPC. It must match the Go worker registration.
@@ -91,6 +92,7 @@ export class MortgageService {
   async startApplication(
     applicationId: string,
     applicantName: string,
+    scenario?: MortgageScenario,
   ): Promise<{ workflowId: string; applicationId: string }> {
     const workflowId = this.workflowId(applicationId);
 
@@ -113,6 +115,7 @@ export class MortgageService {
           applicationId,
           applicantName,
           submittedAt: new Date().toISOString(),
+          scenario: scenario ?? 'happy_path',
         },
       ],
     });

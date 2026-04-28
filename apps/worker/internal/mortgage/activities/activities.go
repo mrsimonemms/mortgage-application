@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 )
 
 // Activities groups all mortgage application activity implementations.
@@ -84,12 +85,32 @@ func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (Re
 }
 
 // CompleteApplication finalises the mortgage once an offer has been reserved.
+//
+// When SimulateFailure is set the activity fails on the first four attempts and
+// succeeds on the fifth, demonstrating Temporal's automatic retry behaviour. Each
+// failure is a retryable ApplicationError so Temporal drives the backoff — no manual
+// retry loop is needed in workflow code.
 func (Activities) CompleteApplication(ctx context.Context, input CompleteApplicationInput) (CompleteApplicationResult, error) {
 	logger := activity.GetLogger(ctx)
+	info := activity.GetInfo(ctx)
+
+	if input.SimulateFailure && info.Attempt <= 4 {
+		logger.Warn("simulating completion failure for demo; Temporal will retry",
+			"applicationId", input.ApplicationID,
+			"offerId", input.OfferID,
+			"attempt", info.Attempt,
+		)
+		return CompleteApplicationResult{}, temporal.NewApplicationError(
+			"completion failure injected for demo",
+			"InjectedFulfilmentFailure",
+			nil,
+		)
+	}
 
 	logger.Info("mortgage application completed",
 		"applicationId", input.ApplicationID,
 		"offerId", input.OfferID,
+		"attempt", info.Attempt,
 	)
 
 	return CompleteApplicationResult{
