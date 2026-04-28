@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // testApplicationID and testApplicantName are shared across test files in this package.
@@ -69,11 +68,9 @@ func TestMortgageApplication_JSONFields(t *testing.T) {
 		}
 
 		data, err := json.Marshal(app)
-		require.NoError(t, err)
-
+		assert.NoError(t, err)
 		var out map[string]any
-		require.NoError(t, json.Unmarshal(data, &out))
-
+		assert.NoError(t, json.Unmarshal(data, &out))
 		for _, field := range []string{"applicationId", "applicantName", "status", "currentStep", "offerId", "createdAt", "updatedAt", "timeline"} {
 			assert.Contains(t, out, field)
 		}
@@ -91,11 +88,9 @@ func TestMortgageApplication_JSONFields(t *testing.T) {
 		}
 
 		data, err := json.Marshal(app)
-		require.NoError(t, err)
-
+		assert.NoError(t, err)
 		var out map[string]any
-		require.NoError(t, json.Unmarshal(data, &out))
-
+		assert.NoError(t, json.Unmarshal(data, &out))
 		assert.NotContains(t, out, "offerId")
 	})
 }
@@ -112,11 +107,9 @@ func TestTimelineEntry_JSONFields(t *testing.T) {
 		}
 
 		data, err := json.Marshal(entry)
-		require.NoError(t, err)
-
+		assert.NoError(t, err)
 		var out map[string]any
-		require.NoError(t, json.Unmarshal(data, &out))
-
+		assert.NoError(t, json.Unmarshal(data, &out))
 		for _, field := range []string{"step", "status", "timestamp", "details"} {
 			assert.Contains(t, out, field)
 		}
@@ -130,11 +123,9 @@ func TestTimelineEntry_JSONFields(t *testing.T) {
 		}
 
 		data, err := json.Marshal(entry)
-		require.NoError(t, err)
-
+		assert.NoError(t, err)
 		var out map[string]any
-		require.NoError(t, json.Unmarshal(data, &out))
-
+		assert.NoError(t, json.Unmarshal(data, &out))
 		assert.NotContains(t, out, "details")
 	})
 }
