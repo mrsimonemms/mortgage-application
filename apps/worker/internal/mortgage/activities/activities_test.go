@@ -171,16 +171,44 @@ func TestCompleteApplication(t *testing.T) {
 }
 
 func TestReleaseOffer(t *testing.T) {
-	env := newTestEnv(t)
+	t.Run("releases an offer successfully", func(t *testing.T) {
+		env := newTestEnv(t)
 
-	val, err := env.ExecuteActivity(Activities{}.ReleaseOffer, ReleaseOfferInput{
-		ApplicationID: "APP-001",
-		OfferID:       "OFFER-APP-001",
+		val, err := env.ExecuteActivity(Activities{}.ReleaseOffer, ReleaseOfferInput{
+			ApplicationID: "APP-001",
+			OfferID:       "OFFER-APP-001",
+		})
+
+		assert.NoError(t, err)
+		var result ReleaseOfferResult
+		assert.NoError(t, val.Get(&result))
+		assert.Equal(t, "APP-001", result.ApplicationID)
+		assert.False(t, result.ReleasedAt.IsZero())
 	})
 
-	assert.NoError(t, err)
-	var result ReleaseOfferResult
-	assert.NoError(t, val.Get(&result))
-	assert.Equal(t, "APP-001", result.ApplicationID)
-	assert.False(t, result.ReleasedAt.IsZero())
+	// ReleaseOffer is idempotent: repeated calls for the same offerId succeed without
+	// error. Temporal may retry the compensation activity, and each retry must produce
+	// the same logical outcome without creating duplicate side effects.
+	t.Run("is idempotent: repeated calls for the same offerId succeed", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		val1, err := env.ExecuteActivity(Activities{}.ReleaseOffer, ReleaseOfferInput{
+			ApplicationID: "APP-001",
+			OfferID:       "OFFER-APP-001",
+		})
+		assert.NoError(t, err)
+		var r1 ReleaseOfferResult
+		assert.NoError(t, val1.Get(&r1))
+		assert.Equal(t, "APP-001", r1.ApplicationID)
+
+		val2, err := env.ExecuteActivity(Activities{}.ReleaseOffer, ReleaseOfferInput{
+			ApplicationID: "APP-001",
+			OfferID:       "OFFER-APP-001",
+		})
+		assert.NoError(t, err)
+		var r2 ReleaseOfferResult
+		assert.NoError(t, val2.Get(&r2))
+		assert.Equal(t, "APP-001", r2.ApplicationID)
+		assert.False(t, r2.ReleasedAt.IsZero())
+	})
 }

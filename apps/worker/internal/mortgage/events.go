@@ -9,9 +9,13 @@ const (
 	// ScenarioHappyPath runs the full successful mortgage workflow.
 	ScenarioHappyPath WorkflowScenario = "happy_path"
 	// ScenarioFailAfterOfferReservation reserves an offer then deliberately
-	// fails at the completion stage, leaving the workflow in
-	// StatusCompensationRequired for the compensation demo.
+	// fails at the completion stage. Temporal retries automatically; the
+	// activity succeeds on the fifth attempt. Demonstrates retry-then-succeed.
 	ScenarioFailAfterOfferReservation WorkflowScenario = "fail_after_offer_reservation"
+	// ScenarioFailAndCompensate reserves an offer then fails at the completion
+	// stage with a retry policy that is intentionally exhausted. The workflow
+	// responds by releasing the reserved offer via compensation.
+	ScenarioFailAndCompensate WorkflowScenario = "fail_and_compensate_after_offer_reservation"
 )
 
 type MortgageApplicationSubmitted struct {

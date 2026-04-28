@@ -3,7 +3,7 @@ module github.com/mrsimonemms/mortgage-application/mortgage-application/apps/wor
 go 1.26
 
 require (
-	github.com/mrsimonemms/golang-helpers v0.6.1
+	github.com/mrsimonemms/golang-helpers v0.7.0
 	github.com/mrsimonemms/temporal-codec-server/packages/golang v0.0.0-20260216220812-efae704c32dc
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.11.1
