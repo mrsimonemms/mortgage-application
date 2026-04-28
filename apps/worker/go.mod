@@ -4,7 +4,9 @@ go 1.26
 
 require (
 	github.com/mrsimonemms/golang-helpers v0.6.1
+	github.com/mrsimonemms/temporal-codec-server/packages/golang v0.0.0-20260216220812-efae704c32dc
 	github.com/rs/zerolog v1.35.1
+	github.com/stretchr/testify v1.11.1
 	go.temporal.io/sdk v1.42.0
 )
 
@@ -50,7 +52,6 @@ require (
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	github.com/uber-go/tally/v4 v4.1.17 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
@@ -70,4 +71,5 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	sigs.k8s.io/yaml v1.5.0 // indirect
 )
