@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	gh "github.com/mrsimonemms/golang-helpers"
 	"github.com/mrsimonemms/golang-helpers/temporal"
 	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage"
 	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage/activities"
+	"github.com/mrsimonemms/temporal-codec-server/packages/golang/algorithms/aes"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/worker"
@@ -23,18 +23,30 @@ func exec() error {
 	if l, ok := os.LookupEnv("LOG_LEVEL"); ok {
 		logLevel = l
 	}
-	fmt.Println(logLevel)
 	level, err := zerolog.ParseLevel(logLevel)
 	if err != nil {
 		return err
 	}
 	zerolog.SetGlobalLevel(level)
 
-	// The client is a heavyweight object that should be created once per process.
-	c, err := temporal.NewConnectionWithEnvvars(
+	opts := []temporal.Options{
 		temporal.WithZerolog(&log.Logger),
 		temporal.WithPrometheusMetrics("0.0.0.0:9090", "", nil),
-	)
+	}
+
+	if keysPath, ok := os.LookupEnv("KEYS_PATH"); ok {
+		keys, err := aes.ReadKeyFile(keysPath)
+		if err != nil {
+			return gh.FatalError{
+				Cause: err,
+				Msg:   "Unable to read keys file",
+			}
+		}
+		opts = append(opts, temporal.WithDataConverter(aes.DataConverter(keys)))
+	}
+
+	// The client is a heavyweight object that should be created once per process.
+	c, err := temporal.NewConnectionWithEnvvars(opts...)
 	if err != nil {
 		return gh.FatalError{
 			Cause: err,
