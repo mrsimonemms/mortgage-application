@@ -38,7 +38,10 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 
 	acts := activities.Activities{}
 
-	recordTimeline(&app, ctx, "submitted", TimelineCompleted, "Application received")
+	recordTimeline(&app, ctx, "submitted", TimelineCompleted, "Application received", map[string]string{
+		"applicationId": app.ApplicationID,
+		"applicantName": app.ApplicantName,
+	})
 
 	if err := runIntake(ctx, actCtx, &app, acts); err != nil {
 		return app, err
@@ -53,12 +56,20 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 	if creditResult.Result == CreditCheckRejected {
 		app.Status = StatusRejected
 		app.CurrentStep = "rejected"
-		recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check rejected")
+		meta := map[string]string{"result": string(creditResult.Result)}
+		if creditResult.Reference != "" {
+			meta["reference"] = creditResult.Reference
+		}
+		recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check rejected", meta)
 
 		return app, nil
 	}
 
-	recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check approved")
+	meta := map[string]string{"result": string(creditResult.Result)}
+	if creditResult.Reference != "" {
+		meta["reference"] = creditResult.Reference
+	}
+	recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check approved", meta)
 
 	if err := runOfferReservation(ctx, actCtx, &app, acts); err != nil {
 		return app, err
@@ -73,7 +84,7 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 
 func runIntake(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
 	app.CurrentStep = "intake"
-	recordTimeline(app, ctx, "intake", TimelineStarted, "")
+	recordTimeline(app, ctx, "intake", TimelineStarted, "Application intake started")
 
 	var result activities.IntakeResult
 	if err := workflow.ExecuteActivity(actCtx, acts.Intake, activities.IntakeInput{
@@ -83,7 +94,7 @@ func runIntake(ctx, actCtx workflow.Context, app *MortgageApplication, acts acti
 		return err
 	}
 
-	recordTimeline(app, ctx, "intake", TimelineCompleted, "")
+	recordTimeline(app, ctx, "intake", TimelineCompleted, "Application intake recorded")
 
 	return nil
 }
@@ -91,22 +102,27 @@ func runIntake(ctx, actCtx workflow.Context, app *MortgageApplication, acts acti
 func requestCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
 	app.Status = StatusCreditCheckPending
 	app.CurrentStep = "credit_check"
-	recordTimeline(app, ctx, "credit_check", TimelineStarted, "Credit and AML check requested")
 
+	var result activities.CreditCheckRequestResult
 	if err := workflow.ExecuteActivity(actCtx, acts.RequestCreditCheck, activities.CreditCheckInput{
 		ApplicationID: app.ApplicationID,
-	}).Get(ctx, nil); err != nil {
+	}).Get(ctx, &result); err != nil {
 		return err
 	}
+
+	recordTimeline(app, ctx, "credit_check", TimelineStarted, "Credit and AML check requested", map[string]string{
+		"reference": result.Reference,
+	})
 
 	return nil
 }
 
 // waitForCreditResult blocks the workflow durably until the CreditCheckCompleted signal
-// arrives. The currentStep is updated so the query handler reflects the waiting state.
-// No timeline entry is added here — the signal arrival is recorded in the caller.
+// arrives. A waiting entry is appended before blocking so the query handler reflects
+// the durable pause while the workflow is suspended.
 func waitForCreditResult(ctx workflow.Context, app *MortgageApplication) CreditCheckCompleted {
 	app.CurrentStep = "awaiting_credit_result"
+	recordTimeline(app, ctx, "credit_check", TimelineWaiting, "Awaiting credit bureau result")
 
 	var result CreditCheckCompleted
 	workflow.GetSignalChannel(ctx, CreditCheckCompletedSignal).Receive(ctx, &result)
@@ -116,7 +132,7 @@ func waitForCreditResult(ctx workflow.Context, app *MortgageApplication) CreditC
 
 func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
 	app.CurrentStep = "offer_reservation"
-	recordTimeline(app, ctx, "offer_reservation", TimelineStarted, "")
+	recordTimeline(app, ctx, "offer_reservation", TimelineStarted, "Offer reservation started")
 
 	var result activities.ReserveOfferResult
 	if err := workflow.ExecuteActivity(actCtx, acts.ReserveOffer, activities.ReserveOfferInput{
@@ -127,17 +143,21 @@ func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication,
 
 	app.OfferID = result.OfferID
 	app.Status = StatusOfferReserved
-	recordTimeline(app, ctx, "offer_reservation", TimelineCompleted, "Offer "+result.OfferID+" reserved")
+	recordTimeline(app, ctx, "offer_reservation", TimelineCompleted, "Offer reserved", map[string]string{
+		"offerId": result.OfferID,
+	})
 
 	return nil
 }
 
 func runCompleteApplication(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
 	app.CurrentStep = "fulfilment"
-	recordTimeline(app, ctx, "fulfilment", TimelineStarted, "")
+	recordTimeline(app, ctx, "fulfilment", TimelineStarted, "Fulfilment started", map[string]string{
+		"offerId": app.OfferID,
+	})
 
-	var result activities.FulfilmentResult
-	if err := workflow.ExecuteActivity(actCtx, acts.CompleteApplication, activities.FulfilmentInput{
+	var result activities.CompleteApplicationResult
+	if err := workflow.ExecuteActivity(actCtx, acts.CompleteApplication, activities.CompleteApplicationInput{
 		ApplicationID: app.ApplicationID,
 		OfferID:       app.OfferID,
 	}).Get(ctx, &result); err != nil {
@@ -146,17 +166,26 @@ func runCompleteApplication(ctx, actCtx workflow.Context, app *MortgageApplicati
 
 	app.Status = StatusCompleted
 	app.CurrentStep = "completed"
-	recordTimeline(app, ctx, "fulfilment", TimelineCompleted, "Mortgage application completed")
+	recordTimeline(app, ctx, "fulfilment", TimelineCompleted, "Mortgage application completed", map[string]string{
+		"offerId": app.OfferID,
+		"status":  string(StatusCompleted),
+	})
 
 	return nil
 }
 
-func recordTimeline(app *MortgageApplication, ctx workflow.Context, step string, status TimelineStatus, details string) {
-	app.Timeline = append(app.Timeline, TimelineEntry{
+// recordTimeline appends an audit entry to the application timeline and advances
+// UpdatedAt. The optional metadata map carries structured data for the entry.
+func recordTimeline(app *MortgageApplication, ctx workflow.Context, step string, status TimelineStatus, details string, metadata ...map[string]string) {
+	entry := TimelineEntry{
 		Step:      step,
 		Status:    status,
 		Timestamp: workflow.Now(ctx),
 		Details:   details,
-	})
+	}
+	if len(metadata) > 0 {
+		entry.Metadata = metadata[0]
+	}
+	app.Timeline = append(app.Timeline, entry)
 	app.UpdatedAt = workflow.Now(ctx)
 }

@@ -40,14 +40,14 @@ type ReserveOfferResult struct {
 	ReservedAt    time.Time `json:"reservedAt"`
 }
 
-type FulfilmentInput struct {
+type CompleteApplicationInput struct {
 	ApplicationID string `json:"applicationId"`
 	OfferID       string `json:"offerId"`
 }
 
-type FulfilmentResult struct {
+type CompleteApplicationResult struct {
 	ApplicationID string    `json:"applicationId"`
-	FulfilledAt   time.Time `json:"fulfilledAt"`
+	CompletedAt   time.Time `json:"completedAt"`
 }
 
 type ReleaseOfferInput struct {

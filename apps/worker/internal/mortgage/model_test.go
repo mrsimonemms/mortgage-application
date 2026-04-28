@@ -41,6 +41,7 @@ func TestTimelineStatus_Values(t *testing.T) {
 		{TimelineStarted, "started"},
 		{TimelineCompleted, "completed"},
 		{TimelineFailed, "failed"},
+		{TimelineWaiting, "waiting"},
 	}
 
 	for _, tc := range cases {
@@ -98,24 +99,25 @@ func TestMortgageApplication_JSONFields(t *testing.T) {
 func TestTimelineEntry_JSONFields(t *testing.T) {
 	ts := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	t.Run("all fields present", func(t *testing.T) {
+	t.Run("all fields present including metadata", func(t *testing.T) {
 		entry := TimelineEntry{
 			Step:      "intake",
 			Status:    TimelineCompleted,
 			Timestamp: ts,
 			Details:   "Application received",
+			Metadata:  map[string]string{"applicationId": testApplicationID},
 		}
 
 		data, err := json.Marshal(entry)
 		assert.NoError(t, err)
 		var out map[string]any
 		assert.NoError(t, json.Unmarshal(data, &out))
-		for _, field := range []string{"step", "status", "timestamp", "details"} {
+		for _, field := range []string{"step", "status", "timestamp", "details", "metadata"} {
 			assert.Contains(t, out, field)
 		}
 	})
 
-	t.Run("details omitted when empty", func(t *testing.T) {
+	t.Run("details and metadata omitted when empty", func(t *testing.T) {
 		entry := TimelineEntry{
 			Step:      "intake",
 			Status:    TimelineStarted,
@@ -127,5 +129,6 @@ func TestTimelineEntry_JSONFields(t *testing.T) {
 		var out map[string]any
 		assert.NoError(t, json.Unmarshal(data, &out))
 		assert.NotContains(t, out, "details")
+		assert.NotContains(t, out, "metadata")
 	})
 }

@@ -1,5 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { WorkflowNotFoundError } from '@temporalio/client';
 
 import { WORKFLOW_CLIENT } from '../temporal/temporal.providers';
 import { MortgageService } from './mortgage.service';
@@ -65,7 +66,16 @@ describe('MortgageService', () => {
       });
     });
 
-    it('throws ConflictException when the workflow is already running', async () => {
+    it('throws ConflictException when a workflow is already running', async () => {
+      // default: mockHandle.describe resolves with STATUS_RUNNING
+      await expect(
+        service.startApplication('app-123', 'John Smith'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException when a workflow already completed', async () => {
+      mockHandle.describe.mockResolvedValue({ status: { code: 2 } }); // COMPLETED
+
       await expect(
         service.startApplication('app-123', 'John Smith'),
       ).rejects.toThrow(ConflictException);
@@ -73,7 +83,7 @@ describe('MortgageService', () => {
   });
 
   describe('getApplication', () => {
-    it('queries the correct workflow using the getApplication query', async () => {
+    it('returns application state for a running workflow', async () => {
       const mockApp = { applicationId: 'app-123', status: 'submitted' };
       mockHandle.query.mockResolvedValue(mockApp);
 
@@ -86,11 +96,36 @@ describe('MortgageService', () => {
       expect(result).toEqual(mockApp);
     });
 
-    it('throws NotFoundException when the workflow is not running', async () => {
-      mockHandle.describe.mockRejectedValue(new Error('not found'));
+    it('returns application state for a completed workflow', async () => {
+      const mockApp = { applicationId: 'app-123', status: 'completed' };
+      mockHandle.query.mockResolvedValue(mockApp);
+
+      const result = await service.getApplication('app-123');
+
+      expect(result).toEqual(mockApp);
+    });
+
+    it('throws NotFoundException when the workflow does not exist', async () => {
+      mockHandle.query.mockRejectedValue(
+        new WorkflowNotFoundError(
+          'workflow not found',
+          'mortgage-application-app-123',
+          undefined,
+        ),
+      );
 
       await expect(service.getApplication('app-123')).rejects.toThrow(
         NotFoundException,
+      );
+    });
+
+    it('propagates unexpected errors from the query', async () => {
+      mockHandle.query.mockRejectedValue(
+        new Error('unexpected temporal error'),
+      );
+
+      await expect(service.getApplication('app-123')).rejects.toThrow(
+        'unexpected temporal error',
       );
     });
   });
