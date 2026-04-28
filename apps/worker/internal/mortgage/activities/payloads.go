@@ -16,6 +16,13 @@ type CreditCheckInput struct {
 	ApplicationID string `json:"applicationId"`
 }
 
+// CreditCheckRequestResult is returned by RequestCreditCheck to confirm the
+// request was dispatched and to provide a correlation reference.
+type CreditCheckRequestResult struct {
+	ApplicationID string `json:"applicationId"`
+	Reference     string `json:"reference"`
+}
+
 type CreditCheckOutput struct {
 	ApplicationID string    `json:"applicationId"`
 	Result        string    `json:"result"`
