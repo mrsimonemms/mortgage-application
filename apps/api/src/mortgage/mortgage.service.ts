@@ -18,6 +18,7 @@ import { MortgageScenario } from './models/mortgage-scenario.type';
 const WORKFLOW_TYPE = 'MortgageApplicationWorkflow';
 const TASK_QUEUE = 'mortgage-application';
 const SIGNAL_CREDIT_CHECK_COMPLETED = 'credit-check-completed';
+const SIGNAL_FULFILMENT_RETRY = 'retry-fulfilment';
 const QUERY_GET_APPLICATION = 'getApplication';
 
 @Injectable()
@@ -28,6 +29,17 @@ export class MortgageService {
 
   workflowId(applicationId: string): string {
     return `mortgage-application-${applicationId}`;
+  }
+
+  async retryFulfilment(applicationId: string): Promise<void> {
+    if (!(await this.isWorkflowRunning(this.workflowId(applicationId)))) {
+      throw new NotFoundException(`Application ${applicationId} not found`);
+    }
+
+    const handle = this.client.workflow.getHandle(
+      this.workflowId(applicationId),
+    );
+    await handle.signal(SIGNAL_FULFILMENT_RETRY);
   }
 
   async completeCreditCheck(

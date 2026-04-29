@@ -198,6 +198,25 @@ describe('MortgageService', () => {
     });
   });
 
+  describe('retryFulfilment', () => {
+    it('sends retry-fulfilment signal to the running workflow', async () => {
+      await service.retryFulfilment('app-123');
+
+      expect(mockWorkflowClient.workflow.getHandle).toHaveBeenCalledWith(
+        'mortgage-application-app-123',
+      );
+      expect(mockHandle.signal).toHaveBeenCalledWith('retry-fulfilment');
+    });
+
+    it('throws NotFoundException when the workflow is not running', async () => {
+      mockHandle.describe.mockRejectedValue(new Error('not found'));
+
+      await expect(service.retryFulfilment('app-123')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
   describe('completeCreditCheck', () => {
     it('sends credit-check-completed signal with correct payload', async () => {
       await service.completeCreditCheck('app-123', 'approved', 'REF-001');

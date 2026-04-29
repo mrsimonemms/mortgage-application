@@ -83,4 +83,22 @@ export class MortgageController {
       dto.reference,
     );
   }
+
+  @Post(':applicationId/retry-fulfilment')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Retry fulfilment after compensation',
+    description:
+      'Sends a signal to a workflow that is waiting after offer release. The workflow will re-reserve the offer and re-attempt fulfilment.',
+  })
+  @ApiParam({
+    name: 'applicationId',
+    type: String,
+    example: MORTGAGE_EXAMPLE_APPLICATION_ID,
+  })
+  @ApiResponse({ status: 202, description: 'Signal accepted' })
+  @ApiResponse({ status: 404, description: 'Workflow not running' })
+  retryFulfilment(@Param('applicationId') applicationId: string) {
+    return this.mortgageService.retryFulfilment(applicationId);
+  }
 }

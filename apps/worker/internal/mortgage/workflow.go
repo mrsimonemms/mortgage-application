@@ -110,8 +110,8 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 	})
 
 	if err = runCompleteApplication(ctx, &app, acts, event.Scenario); err != nil {
-		// Record the failure before the deferred compensator runs so the audit
-		// trail shows the fulfilment failure ahead of the compensation entries.
+		// Record the failure before compensation so the audit trail shows the
+		// fulfilment failure ahead of the compensation entries.
 		recordTimeline(&app, ctx, "fulfilment", TimelineFailed,
 			"Fulfilment failed after maximum retries",
 			map[string]string{
@@ -121,7 +121,43 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		app.Status = StatusCompensationRequired
 		app.CurrentStep = "compensation"
 		upsertSearchAttributes(ctx, &app, false)
-		return // deferred compensator handles the release-offer step
+
+		// Run compensation immediately from a disconnected context, then clear the
+		// compensator and error so the deferred block does not double-compensate.
+		disconnectedCtx, _ := workflow.NewDisconnectedContext(ctx)
+		comp.Compensate(disconnectedCtx)
+		comp = saga.Compensator{}
+		err = nil
+
+		// Block until an operator signals that fulfilment should be retried.
+		waitForRetrySignal(ctx, &app)
+
+		// Re-reserve the offer. ReserveOffer derives the offer ID deterministically
+		// from the application ID, so this call is idempotent.
+		if err = runOfferReservation(ctx, actCtx, &app, acts); err != nil {
+			return
+		}
+
+		// Re-register compensation for the re-reserved offer.
+		retryAppID := app.ApplicationID
+		retryOfferID := app.OfferID
+		comp.Add(func(compCtx workflow.Context) error {
+			return compensateReleaseOffer(compCtx, &app, acts, retryAppID, retryOfferID)
+		})
+
+		// Re-run fulfilment with no failure injection.
+		if err = runCompleteApplication(ctx, &app, acts, ScenarioHappyPath); err != nil {
+			recordTimeline(&app, ctx, "fulfilment", TimelineFailed,
+				"Fulfilment failed after retry",
+				map[string]string{
+					"offerId": retryOfferID,
+					"reason":  "Maximum retry attempts exhausted on retry",
+				})
+			app.Status = StatusCompensationRequired
+			app.CurrentStep = "compensation"
+			upsertSearchAttributes(ctx, &app, false)
+			return // deferred compensator handles the release-offer step
+		}
 	}
 
 	return
@@ -178,6 +214,19 @@ func waitForCreditResult(ctx workflow.Context, app *MortgageApplication) CreditC
 	upsertSearchAttributes(ctx, app, false)
 
 	return result
+}
+
+// waitForRetrySignal blocks until an operator sends FulfilmentRetrySignal. It
+// sets the current step and records a waiting timeline entry so the audit trail
+// and search attributes reflect the durable pause.
+func waitForRetrySignal(ctx workflow.Context, app *MortgageApplication) {
+	app.CurrentStep = "awaiting_retry_signal"
+	recordTimeline(app, ctx, "fulfilment_retry", TimelineWaiting, "Awaiting operator retry signal")
+	upsertSearchAttributes(ctx, app, true)
+
+	workflow.GetSignalChannel(ctx, FulfilmentRetrySignal).Receive(ctx, nil)
+
+	upsertSearchAttributes(ctx, app, false)
 }
 
 func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
