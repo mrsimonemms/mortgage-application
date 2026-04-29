@@ -685,6 +685,28 @@ Formatting is part of the definition of done for API changes.
 
 ---
 
+## Application builds
+
+Application builds are required in addition to pre-commit checks. A task is not
+complete if the relevant app build fails.
+
+When files in these apps are changed, Claude must run the corresponding build
+before considering the task complete:
+
+- `apps/api`: `cd apps/api && npm run build`
+- `apps/worker`: `cd apps/worker && go build -o /tmp/worker .`
+- `apps/ui`: `cd apps/ui && npm run build`
+
+Run only the builds for the apps that were changed. If changes span multiple
+apps, run all relevant builds.
+
+Do not:
+- skip the build step for small changes
+- assume pre-commit passing is sufficient
+- claim a task is complete if the build fails
+
+---
+
 ### Expectations by area
 
 #### Go (worker)
@@ -720,3 +742,4 @@ A change is not complete until:
 - Relevant code compiles
 - Pre-commit checks pass
 - No new linting or formatting errors are introduced
+- The app build passes for every app that was changed
