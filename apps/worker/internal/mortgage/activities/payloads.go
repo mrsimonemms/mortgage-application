@@ -54,6 +54,16 @@ type CompleteApplicationResult struct {
 	CompletedAt   time.Time `json:"completedAt"`
 }
 
+type PropertyValuationInput struct {
+	ApplicationID string `json:"applicationId"`
+}
+
+type PropertyValuationResult struct {
+	ApplicationID      string `json:"applicationId"`
+	ValuationReference string `json:"valuationReference"`
+	ValuationAmount    int64  `json:"valuationAmount"`
+}
+
 type ReleaseOfferInput struct {
 	ApplicationID string `json:"applicationId"`
 	OfferID       string `json:"offerId"`

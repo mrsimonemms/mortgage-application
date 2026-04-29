@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 const (
@@ -57,7 +58,14 @@ func exec() error {
 
 	w := worker.New(c, TaskQueue, worker.Options{})
 
-	w.RegisterWorkflow(mortgage.MortgageApplicationWorkflow)
+	profile := os.Getenv("WORKER_PROFILE")
+	wfOpts := mortgage.WorkflowOptions{
+		EnableValuation: profile != "v2",
+	}
+	w.RegisterWorkflowWithOptions(
+		mortgage.NewMortgageApplicationWorkflow(wfOpts),
+		workflow.RegisterOptions{Name: "MortgageApplicationWorkflow"},
+	)
 	w.RegisterActivity(&activities.Activities{})
 
 	// Start the healthcheck server in a separate goroutine

@@ -1,6 +1,7 @@
 package mortgage
 
 import (
+	"strconv"
 	"time"
 
 	saga "github.com/mrsimonemms/golang-helpers/temporal"
@@ -9,21 +10,46 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// MortgageApplicationWorkflow orchestrates the full mortgage application.
+// WorkflowOptions configures the behaviour of the registered mortgage workflow.
+// Set EnableValuation to false to emulate a pre-valuation (v1) worker.
+type WorkflowOptions struct {
+	EnableValuation bool
+}
+
+// NewMortgageApplicationWorkflow returns a workflow function bound to the given
+// options. Register the returned closure using an explicit workflow name so the
+// workflow type remains stable across worker versions:
+//
+//	w.RegisterWorkflowWithOptions(
+//	    mortgage.NewMortgageApplicationWorkflow(opts),
+//	    workflow.RegisterOptions{Name: "MortgageApplicationWorkflow"},
+//	)
+func NewMortgageApplicationWorkflow(opts WorkflowOptions) func(workflow.Context, MortgageApplicationSubmitted) (MortgageApplication, error) {
+	return func(ctx workflow.Context, event MortgageApplicationSubmitted) (MortgageApplication, error) {
+		return runMortgageApplicationWorkflow(ctx, event, opts)
+	}
+}
+
+// runMortgageApplicationWorkflow orchestrates the full mortgage application.
 //
 // Steps:
 //  1. Intake — record receipt of the application
 //  2. Credit check request — dispatch to external bureau (activity)
 //  3. Durable wait — block until CreditCheckCompleted signal arrives (signal)
-//  4. Offer reservation — allocate a mortgage offer
-//  5. Complete application — mark the application as completed
+//  4. Property valuation — assess the property value (opts.EnableValuation only)
+//  5. Offer reservation — allocate a mortgage offer
+//  6. Complete application — mark the application as completed
 //
 // Saga pattern: a compensation function is registered immediately after the offer
 // reservation succeeds. If any later step fails and the workflow returns an error,
 // the deferred compensator releases the reserved offer from a disconnected context
 // and updates the audit trail. The workflow still returns the original error so the
 // business failure is correctly reflected in Temporal.
-func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplicationSubmitted) (app MortgageApplication, err error) {
+//
+// Versioning: when EnableValuation is true, step 4 is guarded by
+// GetVersion("add-property-valuation"). Workflows started before this change skip
+// the step on replay; new workflows execute it.
+func runMortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplicationSubmitted, opts WorkflowOptions) (app MortgageApplication, err error) {
 	app = MortgageApplication{
 		ApplicationID: event.ApplicationID,
 		ApplicantName: event.ApplicantName,
@@ -95,6 +121,19 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		meta["reference"] = creditResult.Reference
 	}
 	recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check approved", meta)
+
+	// EnableValuation gates the entire versioning block. When false (v1 worker) the
+	// GetVersion call is skipped so no marker is written and old replay histories
+	// remain valid. When true, GetVersion handles in-flight workflow safety: existing
+	// executions without a marker return DefaultVersion and skip the step; new
+	// executions return version 1 and execute it.
+	if opts.EnableValuation {
+		if v := workflow.GetVersion(ctx, "add-property-valuation", workflow.DefaultVersion, 1); v != workflow.DefaultVersion {
+			if err = runPropertyValuation(ctx, actCtx, &app, acts); err != nil {
+				return
+			}
+		}
+	}
 
 	if err = runOfferReservation(ctx, actCtx, &app, acts); err != nil {
 		return
@@ -178,6 +217,27 @@ func waitForCreditResult(ctx workflow.Context, app *MortgageApplication) CreditC
 	upsertSearchAttributes(ctx, app, false)
 
 	return result
+}
+
+func runPropertyValuation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
+	app.CurrentStep = "property_valuation"
+	recordTimeline(app, ctx, "valuation", TimelineStarted, "Property valuation started")
+	upsertSearchAttributes(ctx, app, false)
+
+	var result activities.PropertyValuationResult
+	if err := workflow.ExecuteActivity(actCtx, acts.PerformPropertyValuation, activities.PropertyValuationInput{
+		ApplicationID: app.ApplicationID,
+	}).Get(ctx, &result); err != nil {
+		return err
+	}
+
+	recordTimeline(app, ctx, "valuation", TimelineCompleted, "Property valuation completed", map[string]string{
+		"valuationReference": result.ValuationReference,
+		"valuationAmount":    strconv.FormatInt(result.ValuationAmount, 10),
+	})
+	upsertSearchAttributes(ctx, app, false)
+
+	return nil
 }
 
 func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {

@@ -50,17 +50,18 @@ services:
       timeout: 10s
       retries: 3
 
-  worker:
+  worker: &worker
     build:
       context: .
       dockerfile: ./apps/golang.Dockerfile
       target: dev
       args:
         APP: worker
-    environment:
+    environment: &worker-envvars
       KEYS_PATH: /go/root/keys.yaml
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TEMPORAL_ADDRESS: temporal:7233
+      WORKER_PROFILE: v1
     volumes:
       - ./apps/worker:/go/root/apps/worker
       - ./keys.yaml:/go/root/keys.yaml
@@ -72,6 +73,12 @@ services:
       interval: 10s
       timeout: 10s
       retries: 3
+
+  worker_v2:
+    <<: *worker
+    environment:
+      <<: *worker-envvars
+      WORKER_PROFILE: v2
 
   # Example codec server, to decrypt payloads in the Temporal Web UI
   codec-server:

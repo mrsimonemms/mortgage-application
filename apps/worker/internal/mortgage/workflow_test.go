@@ -17,7 +17,8 @@ func runHappyPath(t *testing.T) MortgageApplication {
 
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
-	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	wf := NewMortgageApplicationWorkflow(WorkflowOptions{EnableValuation: true})
+	env.RegisterWorkflow(wf)
 	env.RegisterActivity(&activities.Activities{})
 
 	input := MortgageApplicationSubmitted{
@@ -34,7 +35,7 @@ func runHappyPath(t *testing.T) MortgageApplication {
 		})
 	}, time.Second)
 
-	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+	env.ExecuteWorkflow(wf, input)
 
 	if !assert.True(t, env.IsWorkflowCompleted(), "workflow should have completed") {
 		return MortgageApplication{}
@@ -71,6 +72,8 @@ func TestMortgageApplicationWorkflow_HappyPath(t *testing.T) {
 		"credit_check/started",
 		"credit_check/waiting",
 		"credit_check/completed",
+		"valuation/started",
+		"valuation/completed",
 		"offer_reservation/started",
 		"offer_reservation/completed",
 		"fulfilment/started",
@@ -135,6 +138,18 @@ func TestMortgageApplicationWorkflow_AuditTrail(t *testing.T) {
 			},
 		},
 		{
+			key:     "valuation/started",
+			details: "Property valuation started",
+		},
+		{
+			key:     "valuation/completed",
+			details: "Property valuation completed",
+			metadata: map[string]string{
+				"valuationReference": "VAL-" + testApplicationID,
+				"valuationAmount":    "350000",
+			},
+		},
+		{
 			key:     "offer_reservation/started",
 			details: "Offer reservation started",
 		},
@@ -180,7 +195,8 @@ func TestMortgageApplicationWorkflow_AuditTrail(t *testing.T) {
 func TestMortgageApplicationWorkflow_QueryWhileWaiting(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
-	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	wf := NewMortgageApplicationWorkflow(WorkflowOptions{EnableValuation: true})
+	env.RegisterWorkflow(wf)
 	env.RegisterActivity(&activities.Activities{})
 
 	input := MortgageApplicationSubmitted{
@@ -214,7 +230,7 @@ func TestMortgageApplicationWorkflow_QueryWhileWaiting(t *testing.T) {
 		})
 	}, time.Second)
 
-	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+	env.ExecuteWorkflow(wf, input)
 
 	assert.True(t, env.IsWorkflowCompleted())
 	assert.NoError(t, env.GetWorkflowError())
@@ -225,7 +241,8 @@ func TestMortgageApplicationWorkflow_QueryWhileWaiting(t *testing.T) {
 func TestMortgageApplicationWorkflow_RejectedCreditCheck(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
-	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	wf := NewMortgageApplicationWorkflow(WorkflowOptions{EnableValuation: true})
+	env.RegisterWorkflow(wf)
 	env.RegisterActivity(&activities.Activities{})
 
 	input := MortgageApplicationSubmitted{
@@ -243,7 +260,7 @@ func TestMortgageApplicationWorkflow_RejectedCreditCheck(t *testing.T) {
 		})
 	}, time.Second)
 
-	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+	env.ExecuteWorkflow(wf, input)
 
 	assert.True(t, env.IsWorkflowCompleted())
 	assert.NoError(t, env.GetWorkflowError())
@@ -276,7 +293,8 @@ func TestMortgageApplicationWorkflow_RejectedCreditCheck(t *testing.T) {
 func TestMortgageApplicationWorkflow_RetryAndSucceed(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
-	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	wf := NewMortgageApplicationWorkflow(WorkflowOptions{EnableValuation: true})
+	env.RegisterWorkflow(wf)
 	env.RegisterActivity(&activities.Activities{})
 
 	input := MortgageApplicationSubmitted{
@@ -294,7 +312,7 @@ func TestMortgageApplicationWorkflow_RetryAndSucceed(t *testing.T) {
 		})
 	}, time.Second)
 
-	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+	env.ExecuteWorkflow(wf, input)
 
 	assert.True(t, env.IsWorkflowCompleted())
 	assert.NoError(t, env.GetWorkflowError(), "workflow must complete without error after retries succeed")
@@ -332,7 +350,8 @@ func TestMortgageApplicationWorkflow_RetryAndSucceed(t *testing.T) {
 func TestMortgageApplicationWorkflow_Compensation(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
-	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	wf := NewMortgageApplicationWorkflow(WorkflowOptions{EnableValuation: true})
+	env.RegisterWorkflow(wf)
 	env.RegisterActivity(&activities.Activities{})
 
 	input := MortgageApplicationSubmitted{
@@ -350,7 +369,7 @@ func TestMortgageApplicationWorkflow_Compensation(t *testing.T) {
 		})
 	}, time.Second)
 
-	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+	env.ExecuteWorkflow(wf, input)
 
 	assert.True(t, env.IsWorkflowCompleted())
 	// The workflow must return an error: compensation does not convert the failure

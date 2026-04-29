@@ -84,6 +84,25 @@ func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (Re
 	}, nil
 }
 
+// PerformPropertyValuation produces a deterministic stub valuation for the property
+// associated with the application. In a production system this would call an external
+// valuation service; here it returns a fixed amount for demo reliability.
+func (Activities) PerformPropertyValuation(ctx context.Context, input PropertyValuationInput) (PropertyValuationResult, error) {
+	logger := activity.GetLogger(ctx)
+	reference := "VAL-" + input.ApplicationID
+
+	logger.Info("property valuation completed",
+		"applicationId", input.ApplicationID,
+		"reference", reference,
+	)
+
+	return PropertyValuationResult{
+		ApplicationID:      input.ApplicationID,
+		ValuationReference: reference,
+		ValuationAmount:    350000,
+	}, nil
+}
+
 // CompleteApplication finalises the mortgage once an offer has been reserved.
 //
 // When SimulateFailure is set the activity fails on the first four attempts and

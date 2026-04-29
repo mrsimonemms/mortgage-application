@@ -134,6 +134,21 @@ func TestReserveOffer(t *testing.T) {
 	})
 }
 
+func TestPerformPropertyValuation(t *testing.T) {
+	env := newTestEnv(t)
+
+	val, err := env.ExecuteActivity(Activities{}.PerformPropertyValuation, PropertyValuationInput{
+		ApplicationID: "APP-001",
+	})
+
+	assert.NoError(t, err)
+	var result PropertyValuationResult
+	assert.NoError(t, val.Get(&result))
+	assert.Equal(t, "APP-001", result.ApplicationID)
+	assert.Equal(t, "VAL-APP-001", result.ValuationReference)
+	assert.Equal(t, int64(350000), result.ValuationAmount)
+}
+
 func TestCompleteApplication(t *testing.T) {
 	t.Run("succeeds on the happy path", func(t *testing.T) {
 		env := newTestEnv(t)

@@ -455,6 +455,35 @@ Do not add unnecessary local infrastructure.
 
 Keep the Compose story easy to explain in a demo or handover.
 
+### Worker version emulation (demo only)
+
+The worker service supports a `WORKER_PROFILE` environment variable that selects
+which Docker build target to use and how the workflow is configured at startup.
+
+- Default (no variable or `WORKER_PROFILE=dev`): current worker, property
+  valuation enabled, `GetVersion` versioning guard active.
+- `WORKER_PROFILE=v1`: pre-valuation worker, property valuation disabled at
+  startup via `WorkflowOptions{EnableValuation: false}`.
+
+The Dockerfile `v1` target sets `ENV WORKER_PROFILE=v1`. `main.go` reads
+`WORKER_PROFILE` at startup, constructs a `mortgage.WorkflowOptions` struct, and
+passes it to `mortgage.NewMortgageApplicationWorkflow`. The workflow is registered
+with an explicit name so the Temporal workflow type remains stable across versions.
+
+There is a single workflow implementation file (`workflow.go`). There are no
+build tags or duplicate files. Version behaviour is selected by the options struct,
+not by compile-time code selection.
+
+Usage:
+
+```bash
+WORKER_PROFILE=v1 docker compose up worker   # pre-valuation worker
+docker compose up worker                       # current worker (default)
+```
+
+Do not use `WORKER_PROFILE` for any purpose other than selecting workflow options
+at startup. Do not add `WORKER_PROFILE` checks inside workflow or activity code.
+
 ---
 
 ## Naming and terminology
