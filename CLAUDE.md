@@ -407,6 +407,35 @@ The UI should feel like a focused demo tool, not a productised control centre.
 
 ---
 
+## SvelteKit data loading rules
+
+Initial page data must be loaded through SvelteKit `load` functions, not in `onMount`.
+
+Use `+page.ts` for universal load (runs on both server and client).
+Use `+page.server.ts` only if the data must be kept server-side.
+
+`onMount` is for browser-only behaviour: DOM APIs, event listeners,
+and third-party integrations that require a browser context. It must
+not be used for initial data fetching.
+
+When snapshotting `data` prop values into local `$state`, use
+`untrack()` to signal the intent explicitly and suppress the Svelte
+compiler warning.
+
+Prefer:
+- `+page.ts` load for scenarios, application state from URL params,
+  and any data the page needs on first render
+- polling and post-load refresh via `$effect` (client-side only)
+- `data` prop destructuring into local state only where the component
+  manages that state independently after initialisation
+
+Avoid:
+- `onMount` for API calls or query param reading
+- duplicating load logic in `onMount` and `load`
+- fetching initial page state imperatively in component lifecycle hooks
+
+---
+
 ## Monorepo rules
 
 This repository is a monorepo. Claude should preserve clean app boundaries.
@@ -682,6 +711,32 @@ Do not:
 - rely on pre-commit to fix formatting after the fact
 
 Formatting is part of the definition of done for API changes.
+
+---
+
+## Formatting (UI - SvelteKit)
+
+The UI (`apps/ui`) uses ESLint + Prettier via `npm run lint`.
+
+When making changes to any files under `apps/ui`, Claude must:
+
+- Run linting before running pre-commit:
+  - `cd apps/ui && npm run lint`
+- Ensure all linting and formatting issues are resolved before final validation
+- Then run:
+  - `pre-commit run --all-files`
+
+This ensures:
+- consistent formatting across Svelte, TypeScript and CSS
+- adherence to SvelteKit and Svelte 5 idioms
+- minimal noise in diffs
+- pre-commit checks run on already-clean files
+
+Do not:
+- skip linting for small changes
+- rely on pre-commit to fix issues after the fact
+
+Linting is part of the definition of done for UI changes.
 
 ---
 
