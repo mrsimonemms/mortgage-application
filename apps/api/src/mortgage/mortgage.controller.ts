@@ -17,6 +17,7 @@ import {
 } from '@nestjs/swagger';
 
 import { MORTGAGE_EXAMPLE_APPLICATION_ID } from './constants';
+import { ApplicationListItemDto } from './dto/application-list-item.dto';
 import { CreditCheckDto } from './dto/credit-check.dto';
 import { StartMortgageApplicationDto } from './dto/start-mortgage-application.dto';
 import {
@@ -42,6 +43,13 @@ export class MortgageController {
       dto.applicantName,
       dto.scenario,
     );
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'List all mortgage applications' })
+  @ApiOkResponse({ type: ApplicationListItemDto, isArray: true })
+  listApplications() {
+    return this.mortgageService.listApplications();
   }
 
   @Get('scenarios')
