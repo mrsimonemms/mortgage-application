@@ -220,77 +220,6 @@ A reader should be able to understand:
 
 ---
 
-## Resilience and demonstration intent
-
-This PoC is for a bank audience and should demonstrate production-grade thinking
-about failure, recovery, and durability. Resilience is not a secondary concern.
-
-### Default expectations
-
-Workflows should succeed wherever reasonably possible. The happy path is the
-primary demo scenario and must be reliable.
-
-Failures are expected events, not exceptional ones. The system should handle them
-gracefully and recover without manual intervention where Temporal makes that
-possible.
-
-### Use real Temporal mechanisms
-
-When demonstrating resilience, use Temporal's actual capabilities, not simulated
-outcomes in workflow control flow.
-
-Prefer:
-- Real activity execution, not conditional branches that skip the activity
-- Real activity failures using `temporal.NewApplicationError` or
-  `temporal.NewNonRetryableApplicationError`, not error returns from workflow code
-- Temporal-managed retries via `RetryPolicy`, not manual retry loops
-- Compensation via a real compensating activity, not a status flag set in the
-  workflow without executing the reverse operation
-
-Avoid:
-- Simulating failure outcomes by branching in workflow code before calling the
-  activity
-- Returning a synthetic error from workflow code to mimic an activity failure
-- Treating failure injection as a workflow-level conditional, rather than as
-  activity-level behaviour
-
-### Why this matters
-
-Temporal's value proposition is that it durably manages execution, retries, and
-state across failures. Demonstrating failure injection inside workflow control
-flow misrepresents this. A viewer would reasonably conclude that Temporal requires
-the developer to manage retry logic manually.
-
-The correct pattern is: the activity fails, Temporal retries it, the workflow
-sees the final result. The workflow should not need to know how many attempts were
-made.
-
-### Retry and compensation rules
-
-- Configure `RetryPolicy` on the activity options, not in the workflow logic.
-- Use `MaximumAttempts` to bound retries for demo predictability.
-- If an activity is non-retryable, use `NewNonRetryableApplicationError` in the
-  activity itself, not a workflow-level branch.
-- If compensation is required after a failure, execute the compensating activity.
-  Do not just update the workflow status without performing the reverse operation.
-
-### Failure injection in demo scenarios
-
-Controlled failure injection for demo purposes is acceptable and expected.
-
-When implementing a failure scenario:
-- Put the failure logic in the activity, keyed on the attempt count or an input
-  flag passed from the workflow.
-- Make the failure obvious and intentional. Add a log line that names the
-  scenario.
-- Prefer attempt-based failure (fail on attempts 1 to N, succeed on attempt N+1)
-  over a permanent failure scenario, unless the scenario is specifically about
-  compensation or rejection.
-
-Do not hide failure injection behind opaque helpers or framework abstractions.
-
----
-
 ## Activity design rules
 
 Activities model external work.
@@ -454,35 +383,6 @@ Claude should preserve or improve:
 Do not add unnecessary local infrastructure.
 
 Keep the Compose story easy to explain in a demo or handover.
-
-### Worker version emulation (demo only)
-
-The worker service supports a `WORKER_PROFILE` environment variable that selects
-which Docker build target to use and how the workflow is configured at startup.
-
-- Default (no variable or `WORKER_PROFILE=dev`): current worker, property
-  valuation enabled, `GetVersion` versioning guard active.
-- `WORKER_PROFILE=v1`: pre-valuation worker, property valuation disabled at
-  startup via `WorkflowOptions{EnableValuation: false}`.
-
-The Dockerfile `v1` target sets `ENV WORKER_PROFILE=v1`. `main.go` reads
-`WORKER_PROFILE` at startup, constructs a `mortgage.WorkflowOptions` struct, and
-passes it to `mortgage.NewMortgageApplicationWorkflow`. The workflow is registered
-with an explicit name so the Temporal workflow type remains stable across versions.
-
-There is a single workflow implementation file (`workflow.go`). There are no
-build tags or duplicate files. Version behaviour is selected by the options struct,
-not by compile-time code selection.
-
-Usage:
-
-```bash
-WORKER_PROFILE=v1 docker compose up worker   # pre-valuation worker
-docker compose up worker                       # current worker (default)
-```
-
-Do not use `WORKER_PROFILE` for any purpose other than selecting workflow options
-at startup. Do not add `WORKER_PROFILE` checks inside workflow or activity code.
 
 ---
 
@@ -689,53 +589,6 @@ If pre-commit is not installed, install it:
 
 ---
 
-## Formatting (API - NestJS)
-
-The API (`apps/api`) uses Prettier via `npm run format`.
-
-When making changes to any files under `apps/api`, Claude must:
-
-- Run formatting before running pre-commit:
-  - `cd apps/api && npm run format && npm run lint`
-- Ensure formatting changes are applied before final validation
-- Then run:
-  - `pre-commit run --all-files`
-
-This ensures:
-- consistent formatting in TypeScript code
-- minimal noise in diffs
-- pre-commit checks run on already-formatted files
-
-Do not:
-- skip formatting for small changes
-- rely on pre-commit to fix formatting after the fact
-
-Formatting is part of the definition of done for API changes.
-
----
-
-## Application builds
-
-Application builds are required in addition to pre-commit checks. A task is not
-complete if the relevant app build fails.
-
-When files in these apps are changed, Claude must run the corresponding build
-before considering the task complete:
-
-- `apps/api`: `cd apps/api && npm run build`
-- `apps/worker`: `cd apps/worker && go build -o /tmp/worker .`
-- `apps/ui`: `cd apps/ui && npm run build`
-
-Run only the builds for the apps that were changed. If changes span multiple
-apps, run all relevant builds.
-
-Do not:
-- skip the build step for small changes
-- assume pre-commit passing is sufficient
-- claim a task is complete if the build fails
-
----
-
 ### Expectations by area
 
 #### Go (worker)
@@ -771,4 +624,3 @@ A change is not complete until:
 - Relevant code compiles
 - Pre-commit checks pass
 - No new linting or formatting errors are introduced
-- The app build passes for every app that was changed

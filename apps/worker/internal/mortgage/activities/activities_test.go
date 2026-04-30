@@ -134,19 +134,18 @@ func TestReserveOffer(t *testing.T) {
 	})
 }
 
-func TestPerformPropertyValuation(t *testing.T) {
+func TestRequestPropertyValuation(t *testing.T) {
 	env := newTestEnv(t)
 
-	val, err := env.ExecuteActivity(Activities{}.PerformPropertyValuation, PropertyValuationInput{
+	val, err := env.ExecuteActivity(Activities{}.RequestPropertyValuation, RequestValuationInput{
 		ApplicationID: "APP-001",
 	})
 
 	assert.NoError(t, err)
-	var result PropertyValuationResult
+	var result RequestValuationResult
 	assert.NoError(t, val.Get(&result))
 	assert.Equal(t, "APP-001", result.ApplicationID)
-	assert.Equal(t, "VAL-APP-001", result.ValuationReference)
-	assert.Equal(t, int64(350000), result.ValuationAmount)
+	assert.True(t, strings.HasPrefix(result.Reference, "VAL-REQ-"), "reference should have expected prefix")
 }
 
 func TestCompleteApplication(t *testing.T) {

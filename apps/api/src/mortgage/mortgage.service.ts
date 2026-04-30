@@ -18,6 +18,7 @@ import { MortgageScenario } from './models/mortgage-scenario.type';
 const WORKFLOW_TYPE = 'MortgageApplicationWorkflow';
 const TASK_QUEUE = 'mortgage-application';
 const SIGNAL_CREDIT_CHECK_COMPLETED = 'credit-check-completed';
+const SIGNAL_PROPERTY_VALUATION_COMPLETED = 'property-valuation-completed';
 const QUERY_GET_APPLICATION = 'getApplication';
 
 @Injectable()
@@ -46,6 +47,25 @@ export class MortgageService {
       applicationId,
       result,
       ...(reference !== undefined && { reference }),
+    });
+  }
+
+  async completePropertyValuation(
+    applicationId: string,
+    valuationAmount: number,
+    valuationReference: string,
+  ): Promise<void> {
+    if (!(await this.isWorkflowRunning(this.workflowId(applicationId)))) {
+      throw new NotFoundException(`Application ${applicationId} not found`);
+    }
+
+    const handle = this.client.workflow.getHandle(
+      this.workflowId(applicationId),
+    );
+    await handle.signal(SIGNAL_PROPERTY_VALUATION_COMPLETED, {
+      applicationId,
+      valuationAmount,
+      valuationReference,
     });
   }
 

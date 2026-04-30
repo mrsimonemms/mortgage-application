@@ -54,14 +54,16 @@ type CompleteApplicationResult struct {
 	CompletedAt   time.Time `json:"completedAt"`
 }
 
-type PropertyValuationInput struct {
+// RequestValuationInput is passed to RequestPropertyValuation to initiate the dispatch.
+type RequestValuationInput struct {
 	ApplicationID string `json:"applicationId"`
 }
 
-type PropertyValuationResult struct {
-	ApplicationID      string `json:"applicationId"`
-	ValuationReference string `json:"valuationReference"`
-	ValuationAmount    int64  `json:"valuationAmount"`
+// RequestValuationResult is returned by RequestPropertyValuation to confirm the request
+// was dispatched and to provide a correlation reference.
+type RequestValuationResult struct {
+	ApplicationID string `json:"applicationId"`
+	Reference     string `json:"reference"`
 }
 
 type ReleaseOfferInput struct {

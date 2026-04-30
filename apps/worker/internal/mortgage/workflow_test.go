@@ -10,8 +10,9 @@ import (
 )
 
 // runHappyPath executes the full mortgage workflow through the Temporal test environment
-// and returns the final application state. The credit check signal is delivered with a
-// short delay so the workflow can dispatch its upstream activities first.
+// and returns the final application state. The credit check signal is delivered at T+1s
+// and the property valuation signal at T+2s so the workflow can progress through both
+// durable waits in order.
 func runHappyPath(t *testing.T) MortgageApplication {
 	t.Helper()
 
@@ -34,6 +35,14 @@ func runHappyPath(t *testing.T) MortgageApplication {
 			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
 		})
 	}, time.Second)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(PropertyValuationCompletedSignal, PropertyValuationCompleted{
+			ApplicationID:      testApplicationID,
+			ValuationAmount:    350000,
+			ValuationReference: "VAL-" + testApplicationID,
+		})
+	}, 2*time.Second)
 
 	env.ExecuteWorkflow(wf, input)
 
@@ -73,6 +82,7 @@ func TestMortgageApplicationWorkflow_HappyPath(t *testing.T) {
 		"credit_check/waiting",
 		"credit_check/completed",
 		"valuation/started",
+		"valuation/waiting",
 		"valuation/completed",
 		"offer_reservation/started",
 		"offer_reservation/completed",
@@ -139,7 +149,14 @@ func TestMortgageApplicationWorkflow_AuditTrail(t *testing.T) {
 		},
 		{
 			key:     "valuation/started",
-			details: "Property valuation started",
+			details: "Property valuation requested",
+			metadata: map[string]string{
+				"reference": "VAL-REQ-" + testApplicationID,
+			},
+		},
+		{
+			key:     "valuation/waiting",
+			details: "Awaiting property valuation result",
 		},
 		{
 			key:     "valuation/completed",
@@ -230,6 +247,68 @@ func TestMortgageApplicationWorkflow_QueryWhileWaiting(t *testing.T) {
 		})
 	}, time.Second)
 
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(PropertyValuationCompletedSignal, PropertyValuationCompleted{
+			ApplicationID:      testApplicationID,
+			ValuationAmount:    350000,
+			ValuationReference: "VAL-" + testApplicationID,
+		})
+	}, 2*time.Second)
+
+	env.ExecuteWorkflow(wf, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+}
+
+// TestMortgageApplicationWorkflow_QueryWhileAwaitingValuation queries the workflow while
+// it is blocked on the property valuation signal. The response must show the
+// awaiting_valuation_result step and include a valuation/waiting timeline entry.
+func TestMortgageApplicationWorkflow_QueryWhileAwaitingValuation(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	wf := NewMortgageApplicationWorkflow(WorkflowOptions{EnableValuation: true})
+	env.RegisterWorkflow(wf)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow(QueryApplication)
+		assert.NoError(t, err)
+
+		var app MortgageApplication
+		assert.NoError(t, val.Get(&app))
+
+		assert.Equal(t, "awaiting_valuation_result", app.CurrentStep)
+
+		var found bool
+		for _, e := range app.Timeline {
+			if e.Step == "valuation" && e.Status == TimelineWaiting {
+				found = true
+			}
+		}
+		assert.True(t, found, "timeline should include valuation/waiting entry while blocked on valuation")
+
+		env.SignalWorkflow(PropertyValuationCompletedSignal, PropertyValuationCompleted{
+			ApplicationID:      testApplicationID,
+			ValuationAmount:    350000,
+			ValuationReference: "VAL-" + testApplicationID,
+		})
+	}, 2*time.Second)
+
 	env.ExecuteWorkflow(wf, input)
 
 	assert.True(t, env.IsWorkflowCompleted())
@@ -312,6 +391,14 @@ func TestMortgageApplicationWorkflow_RetryAndSucceed(t *testing.T) {
 		})
 	}, time.Second)
 
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(PropertyValuationCompletedSignal, PropertyValuationCompleted{
+			ApplicationID:      testApplicationID,
+			ValuationAmount:    350000,
+			ValuationReference: "VAL-" + testApplicationID,
+		})
+	}, 2*time.Second)
+
 	env.ExecuteWorkflow(wf, input)
 
 	assert.True(t, env.IsWorkflowCompleted())
@@ -368,6 +455,14 @@ func TestMortgageApplicationWorkflow_Compensation(t *testing.T) {
 			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
 		})
 	}, time.Second)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(PropertyValuationCompletedSignal, PropertyValuationCompleted{
+			ApplicationID:      testApplicationID,
+			ValuationAmount:    350000,
+			ValuationReference: "VAL-" + testApplicationID,
+		})
+	}, 2*time.Second)
 
 	env.ExecuteWorkflow(wf, input)
 

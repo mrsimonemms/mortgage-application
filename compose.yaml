@@ -61,7 +61,7 @@ services:
       KEYS_PATH: /go/root/keys.yaml
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TEMPORAL_ADDRESS: temporal:7233
-      WORKER_PROFILE: v1
+      WORKER_PROFILE: v2
     volumes:
       - ./apps/worker:/go/root/apps/worker
       - ./keys.yaml:/go/root/keys.yaml
@@ -74,11 +74,11 @@ services:
       timeout: 10s
       retries: 3
 
-  worker_v2:
-    <<: *worker
-    environment:
-      <<: *worker-envvars
-      WORKER_PROFILE: v2
+  # worker_v2:
+  #   <<: *worker
+  #   environment:
+  #     <<: *worker-envvars
+  #     WORKER_PROFILE: v2
 
   # Example codec server, to decrypt payloads in the Temporal Web UI
   codec-server:
@@ -102,7 +102,9 @@ services:
       server start-dev --ip 0.0.0.0 --search-attribute ApplicationStatus=Keyword
       --search-attribute CurrentStep=Keyword --search-attribute HasOffer=Bool
       --search-attribute AwaitingExternalSignal=Bool --ui-codec-endpoint
-      http://localhost:8080
+      http://localhost:8080 --db-filename /data/temporal.db
+    volumes:
+      - ./dev/data:/data
     depends_on:
       # Not really a dependency of Temporal, but ensures everything starts up together
       codec-server:

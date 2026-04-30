@@ -84,22 +84,21 @@ func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (Re
 	}, nil
 }
 
-// PerformPropertyValuation produces a deterministic stub valuation for the property
-// associated with the application. In a production system this would call an external
-// valuation service; here it returns a fixed amount for demo reliability.
-func (Activities) PerformPropertyValuation(ctx context.Context, input PropertyValuationInput) (PropertyValuationResult, error) {
+// RequestPropertyValuation dispatches a valuation request to an external valuer.
+// This activity only dispatches the request. The result is delivered asynchronously
+// via the property-valuation-completed signal sent through the API.
+func (Activities) RequestPropertyValuation(ctx context.Context, input RequestValuationInput) (RequestValuationResult, error) {
 	logger := activity.GetLogger(ctx)
-	reference := "VAL-" + input.ApplicationID
+	reference := "VAL-REQ-" + input.ApplicationID
 
-	logger.Info("property valuation completed",
+	logger.Info("property valuation requested; awaiting external result via signal",
 		"applicationId", input.ApplicationID,
 		"reference", reference,
 	)
 
-	return PropertyValuationResult{
-		ApplicationID:      input.ApplicationID,
-		ValuationReference: reference,
-		ValuationAmount:    350000,
+	return RequestValuationResult{
+		ApplicationID: input.ApplicationID,
+		Reference:     reference,
 	}, nil
 }
 

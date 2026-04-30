@@ -198,6 +198,32 @@ describe('MortgageService', () => {
     });
   });
 
+  describe('completePropertyValuation', () => {
+    it('sends property-valuation-completed signal with correct payload', async () => {
+      await service.completePropertyValuation('app-123', 350000, 'VAL-APP-123');
+
+      expect(mockWorkflowClient.workflow.getHandle).toHaveBeenCalledWith(
+        'mortgage-application-app-123',
+      );
+      expect(mockHandle.signal).toHaveBeenCalledWith(
+        'property-valuation-completed',
+        expect.objectContaining({
+          applicationId: 'app-123',
+          valuationAmount: 350000,
+          valuationReference: 'VAL-APP-123',
+        }),
+      );
+    });
+
+    it('throws NotFoundException when the workflow is not running', async () => {
+      mockHandle.describe.mockRejectedValue(new Error('not found'));
+
+      await expect(
+        service.completePropertyValuation('app-123', 350000, 'VAL-APP-123'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
   describe('completeCreditCheck', () => {
     it('sends credit-check-completed signal with correct payload', async () => {
       await service.completeCreditCheck('app-123', 'approved', 'REF-001');

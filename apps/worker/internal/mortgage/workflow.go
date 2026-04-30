@@ -1,6 +1,7 @@
 package mortgage
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
@@ -128,6 +129,7 @@ func runMortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplicat
 	// executions without a marker return DefaultVersion and skip the step; new
 	// executions return version 1 and execute it.
 	if opts.EnableValuation {
+		fmt.Println(workflow.GetVersion(ctx, "add-property-valuation", workflow.DefaultVersion, 1))
 		if v := workflow.GetVersion(ctx, "add-property-valuation", workflow.DefaultVersion, 1); v != workflow.DefaultVersion {
 			if err = runPropertyValuation(ctx, actCtx, &app, acts); err != nil {
 				return
@@ -221,21 +223,34 @@ func waitForCreditResult(ctx workflow.Context, app *MortgageApplication) CreditC
 
 func runPropertyValuation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
 	app.CurrentStep = "property_valuation"
-	recordTimeline(app, ctx, "valuation", TimelineStarted, "Property valuation started")
 	upsertSearchAttributes(ctx, app, false)
 
-	var result activities.PropertyValuationResult
-	if err := workflow.ExecuteActivity(actCtx, acts.PerformPropertyValuation, activities.PropertyValuationInput{
+	var reqResult activities.RequestValuationResult
+	if err := workflow.ExecuteActivity(actCtx, acts.RequestPropertyValuation, activities.RequestValuationInput{
 		ApplicationID: app.ApplicationID,
-	}).Get(ctx, &result); err != nil {
+	}).Get(ctx, &reqResult); err != nil {
 		return err
 	}
 
-	recordTimeline(app, ctx, "valuation", TimelineCompleted, "Property valuation completed", map[string]string{
-		"valuationReference": result.ValuationReference,
-		"valuationAmount":    strconv.FormatInt(result.ValuationAmount, 10),
+	recordTimeline(app, ctx, "valuation", TimelineStarted, "Property valuation requested", map[string]string{
+		"reference": reqResult.Reference,
 	})
+
+	// waitForValuationResult blocks the workflow durably until the PropertyValuationCompleted
+	// signal arrives. AwaitingExternalSignal is set true before blocking.
+	app.CurrentStep = "awaiting_valuation_result"
+	recordTimeline(app, ctx, "valuation", TimelineWaiting, "Awaiting property valuation result")
+	upsertSearchAttributes(ctx, app, true)
+
+	var valuationResult PropertyValuationCompleted
+	workflow.GetSignalChannel(ctx, PropertyValuationCompletedSignal).Receive(ctx, &valuationResult)
+
 	upsertSearchAttributes(ctx, app, false)
+
+	recordTimeline(app, ctx, "valuation", TimelineCompleted, "Property valuation completed", map[string]string{
+		"valuationReference": valuationResult.ValuationReference,
+		"valuationAmount":    strconv.FormatInt(valuationResult.ValuationAmount, 10),
+	})
 
 	return nil
 }

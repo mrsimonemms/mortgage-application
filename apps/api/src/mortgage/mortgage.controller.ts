@@ -18,6 +18,7 @@ import {
 
 import { MORTGAGE_EXAMPLE_APPLICATION_ID } from './constants';
 import { CreditCheckDto } from './dto/credit-check.dto';
+import { PropertyValuationDto } from './dto/property-valuation.dto';
 import { StartMortgageApplicationDto } from './dto/start-mortgage-application.dto';
 import {
   MORTGAGE_SCENARIOS,
@@ -81,6 +82,29 @@ export class MortgageController {
       applicationId,
       dto.result,
       dto.reference,
+    );
+  }
+
+  @Post(':applicationId/property-valuation')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Submit property valuation result for an application',
+  })
+  @ApiParam({
+    name: 'applicationId',
+    type: String,
+    example: MORTGAGE_EXAMPLE_APPLICATION_ID,
+  })
+  @ApiBody({ type: PropertyValuationDto })
+  @ApiResponse({ status: 202, description: 'Signal accepted' })
+  completePropertyValuation(
+    @Param('applicationId') applicationId: string,
+    @Body() dto: PropertyValuationDto,
+  ) {
+    return this.mortgageService.completePropertyValuation(
+      applicationId,
+      dto.valuationAmount,
+      dto.valuationReference,
     );
   }
 }

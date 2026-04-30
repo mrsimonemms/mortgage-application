@@ -39,6 +39,12 @@ type CreditCheckCompleted struct {
 	Reference     string            `json:"reference,omitempty"`
 }
 
+type PropertyValuationCompleted struct {
+	ApplicationID      string `json:"applicationId"`
+	ValuationAmount    int64  `json:"valuationAmount"`
+	ValuationReference string `json:"valuationReference"`
+}
+
 type OfferReserved struct {
 	ApplicationID string    `json:"applicationId"`
 	OfferID       string    `json:"offerId"`
