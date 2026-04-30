@@ -6,9 +6,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Client, WorkflowNotFoundError } from '@temporalio/client';
+import type {
+  WorkflowExecutionInfo,
+  WorkflowExecutionStatusName,
+} from '@temporalio/client/lib/types';
 import * as proto from '@temporalio/proto';
 
 import { WORKFLOW_CLIENT } from '../temporal/temporal.providers';
+import { ApplicationListItemDto } from './dto/application-list-item.dto';
 import { CreditCheckResult } from './events/credit-check.event';
 import { MortgageApplication } from './models/mortgage-application.model';
 import { MortgageScenario } from './models/mortgage-scenario.type';
@@ -19,6 +24,10 @@ const WORKFLOW_TYPE = 'MortgageApplicationWorkflow';
 const TASK_QUEUE = 'mortgage-application';
 const SIGNAL_CREDIT_CHECK_COMPLETED = 'credit-check-completed';
 const QUERY_GET_APPLICATION = 'getApplication';
+
+const STATUS_RUNNING =
+  proto.temporal.api.enums.v1.WorkflowExecutionStatus
+    .WORKFLOW_EXECUTION_STATUS_RUNNING;
 
 @Injectable()
 export class MortgageService {
@@ -68,11 +77,7 @@ export class MortgageService {
 
     try {
       const desc = await this.client.workflow.getHandle(workflowId).describe();
-      return (
-        desc.status.code ===
-        proto.temporal.api.enums.v1.WorkflowExecutionStatus
-          .WORKFLOW_EXECUTION_STATUS_RUNNING
-      );
+      return desc.status.code === STATUS_RUNNING;
     } catch {
       return false;
     }
@@ -107,19 +112,113 @@ export class MortgageService {
       'Starting mortgage application workflow',
     );
 
+    const resolvedScenario = scenario ?? 'happy_path';
+
     await this.client.workflow.start(WORKFLOW_TYPE, {
       taskQueue: TASK_QUEUE,
       workflowId,
+      memo: { applicationId, applicantName, scenario: resolvedScenario },
       args: [
         {
           applicationId,
           applicantName,
           submittedAt: new Date().toISOString(),
-          scenario: scenario ?? 'happy_path',
+          scenario: resolvedScenario,
         },
       ],
     });
 
     return { workflowId, applicationId };
+  }
+
+  async listApplications(): Promise<ApplicationListItemDto[]> {
+    const applications: ApplicationListItemDto[] = [];
+
+    try {
+      for await (const info of this.client.workflow.list({
+        query: `WorkflowType = "${WORKFLOW_TYPE}"`,
+      })) {
+        try {
+          applications.push(await this.resolveListItem(info));
+        } catch {
+          this.logger.warn(
+            { workflowId: info.workflowId },
+            'Failed to retrieve application details',
+          );
+        }
+      }
+    } catch {
+      this.logger.warn('Failed to list applications from Temporal');
+    }
+
+    return applications;
+  }
+
+  private async resolveListItem(
+    info: WorkflowExecutionInfo,
+  ): Promise<ApplicationListItemDto> {
+    const workflowStatus = info.status.name;
+    const memo = this.readMemo(info.memo);
+
+    if (memo.applicantName !== undefined) {
+      return this.toApplicationListItem(info.workflowId, workflowStatus, memo);
+    }
+
+    // Legacy workflows without memo — fall back to query or result
+    const handle = this.client.workflow.getHandle(info.workflowId);
+
+    if (info.status.name === 'RUNNING') {
+      const app = await handle.query<MortgageApplication>(
+        QUERY_GET_APPLICATION,
+      );
+      return this.toApplicationListItem(info.workflowId, workflowStatus, {
+        applicationId: app.applicationId,
+        applicantName: app.applicantName,
+      });
+    }
+
+    if (info.status.name === 'COMPLETED') {
+      const app = (await handle.result()) as MortgageApplication;
+      return this.toApplicationListItem(info.workflowId, workflowStatus, {
+        applicationId: app.applicationId,
+        applicantName: app.applicantName,
+      });
+    }
+
+    return this.toApplicationListItem(info.workflowId, workflowStatus, {});
+  }
+
+  private readMemo(memo: Record<string, unknown> | undefined): {
+    applicationId?: string;
+    applicantName?: string;
+    scenario?: string;
+  } {
+    if (!memo) return {};
+    return {
+      applicationId:
+        typeof memo['applicationId'] === 'string'
+          ? memo['applicationId']
+          : undefined,
+      applicantName:
+        typeof memo['applicantName'] === 'string'
+          ? memo['applicantName']
+          : undefined,
+      scenario:
+        typeof memo['scenario'] === 'string' ? memo['scenario'] : undefined,
+    };
+  }
+
+  private toApplicationListItem(
+    workflowId: string,
+    workflowStatus: WorkflowExecutionStatusName,
+    data: { applicationId?: string; applicantName?: string; scenario?: string },
+  ): ApplicationListItemDto {
+    return {
+      applicationId:
+        data.applicationId ?? workflowId.replace('mortgage-application-', ''),
+      applicantName: data.applicantName ?? '',
+      scenario: data.scenario,
+      workflowStatus,
+    };
   }
 }
