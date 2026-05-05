@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
@@ -14,6 +15,7 @@ import * as proto from '@temporalio/proto';
 import { randomUUID } from 'node:crypto';
 
 import { WORKFLOW_CLIENT } from '../temporal/temporal.providers';
+import { ApplicationActionDto } from './dto/application-action.dto';
 import { ApplicationListItemDto } from './dto/application-list-item.dto';
 import { CreditCheckResult } from './events/credit-check.event';
 import { MortgageApplication } from './models/mortgage-application.model';
@@ -195,6 +197,29 @@ export class MortgageService {
     });
 
     return { applicationId: newApplicationId, workflowId: newWorkflowId };
+  }
+
+  async handleAction(
+    applicationId: string,
+    action: ApplicationActionDto,
+  ): Promise<{ applicationId: string; workflowId: string } | void> {
+    switch (action.type) {
+      case 'submit_credit_check_result':
+        if (!action.payload) {
+          throw new BadRequestException(
+            'payload is required for submit_credit_check_result',
+          );
+        }
+        return this.completeCreditCheck(
+          applicationId,
+          action.payload.result,
+          action.payload.reference,
+        );
+      case 'retry_credit_check':
+        return this.retryCreditCheck(applicationId);
+      case 'rerun_application':
+        return this.rerunApplication(applicationId);
+    }
   }
 
   async listApplications(): Promise<ApplicationListItemDto[]> {

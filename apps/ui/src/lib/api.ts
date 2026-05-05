@@ -82,33 +82,20 @@ export async function getApplication(
   );
 }
 
-export interface CreditCheckPayload {
-  result: 'approved' | 'rejected';
-  reference?: string;
-}
+export type ApplicationAction =
+  | {
+      type: 'submit_credit_check_result';
+      payload: { result: 'approved' | 'rejected'; reference?: string };
+    }
+  | { type: 'retry_credit_check' }
+  | { type: 'rerun_application' };
 
-export async function submitCreditCheck(
+export async function performAction(
   applicationId: string,
-  payload: CreditCheckPayload,
-): Promise<void> {
-  await request<void>(
-    `/v1/applications/${encodeURIComponent(applicationId)}/credit-check`,
-    { method: 'POST', body: JSON.stringify(payload) },
-  );
-}
-
-export async function retryCreditCheck(applicationId: string): Promise<void> {
-  await request<void>(
-    `/v1/applications/${encodeURIComponent(applicationId)}/retry-credit-check`,
-    { method: 'POST' },
-  );
-}
-
-export async function rerunApplication(
-  applicationId: string,
-): Promise<{ applicationId: string; workflowId: string }> {
-  return request<{ applicationId: string; workflowId: string }>(
-    `/v1/applications/${encodeURIComponent(applicationId)}/rerun`,
-    { method: 'POST' },
+  action: ApplicationAction,
+): Promise<{ applicationId: string; workflowId: string } | undefined> {
+  return request<{ applicationId: string; workflowId: string } | undefined>(
+    `/v1/applications/${encodeURIComponent(applicationId)}/actions`,
+    { method: 'POST', body: JSON.stringify(action) },
   );
 }

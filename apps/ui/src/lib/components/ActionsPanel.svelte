@@ -33,9 +33,12 @@
     creditLoading = true;
     creditError = '';
     try {
-      await api.submitCreditCheck(app.applicationId, {
-        result: creditResult,
-        reference: creditRef.trim() || undefined,
+      await api.performAction(app.applicationId, {
+        type: 'submit_credit_check_result',
+        payload: {
+          result: creditResult,
+          reference: creditRef.trim() || undefined,
+        },
       });
       creditRef = '';
       await onRefresh();
@@ -51,7 +54,9 @@
     retryLoading = true;
     retryError = '';
     try {
-      await api.retryCreditCheck(app.applicationId);
+      await api.performAction(app.applicationId, {
+        type: 'retry_credit_check',
+      });
       await onRefresh();
     } catch (err) {
       retryError =
@@ -65,8 +70,12 @@
     rerunLoading = true;
     rerunError = '';
     try {
-      const result = await api.rerunApplication(app.applicationId);
-      await onRerun(result.applicationId);
+      const result = await api.performAction(app.applicationId, {
+        type: 'rerun_application',
+      });
+      if (result) {
+        await onRerun(result.applicationId);
+      }
     } catch (err) {
       rerunError =
         err instanceof Error ? err.message : 'Failed to re-run application';
