@@ -11,6 +11,7 @@ import type {
   WorkflowExecutionStatusName,
 } from '@temporalio/client/lib/types';
 import * as proto from '@temporalio/proto';
+import { randomUUID } from 'node:crypto';
 
 import { WORKFLOW_CLIENT } from '../temporal/temporal.providers';
 import { ApplicationListItemDto } from './dto/application-list-item.dto';
@@ -23,6 +24,7 @@ import { MortgageScenario } from './models/mortgage-scenario.type';
 const WORKFLOW_TYPE = 'MortgageApplicationWorkflow';
 const TASK_QUEUE = 'mortgage-application';
 const SIGNAL_CREDIT_CHECK_COMPLETED = 'credit-check-completed';
+const SIGNAL_RETRY_CREDIT_CHECK = 'retry-credit-check';
 const QUERY_GET_APPLICATION = 'getApplication';
 
 const STATUS_RUNNING =
@@ -129,6 +131,70 @@ export class MortgageService {
     });
 
     return { workflowId, applicationId };
+  }
+
+  async retryCreditCheck(applicationId: string): Promise<void> {
+    if (!(await this.isWorkflowRunning(this.workflowId(applicationId)))) {
+      throw new NotFoundException(`Application ${applicationId} not found`);
+    }
+
+    this.logger.log(
+      { applicationId },
+      'Operator retry: sending retry-credit-check signal',
+    );
+
+    const handle = this.client.workflow.getHandle(
+      this.workflowId(applicationId),
+    );
+    await handle.signal(SIGNAL_RETRY_CREDIT_CHECK);
+  }
+
+  async rerunApplication(
+    applicationId: string,
+  ): Promise<{ applicationId: string; workflowId: string }> {
+    const existingWorkflowId = this.workflowId(applicationId);
+
+    let applicantName = '';
+    let scenario = 'happy_path';
+
+    try {
+      const desc = await this.client.workflow
+        .getHandle(existingWorkflowId)
+        .describe();
+      const memo = this.readMemo(desc.memo);
+      applicantName = memo.applicantName ?? '';
+      scenario = memo.scenario ?? 'happy_path';
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) {
+        throw new NotFoundException(`Application ${applicationId} not found`);
+      }
+      throw err;
+    }
+
+    const newApplicationId = randomUUID();
+    const newWorkflowId = this.workflowId(newApplicationId);
+
+    this.logger.log(
+      { applicationId, newApplicationId },
+      'Operator rerun: starting new workflow',
+    );
+
+    await this.client.workflow.start(WORKFLOW_TYPE, {
+      taskQueue: TASK_QUEUE,
+      workflowId: newWorkflowId,
+      memo: { applicationId: newApplicationId, applicantName, scenario },
+      args: [
+        {
+          applicationId: newApplicationId,
+          applicantName,
+          submittedAt: new Date().toISOString(),
+          scenario,
+          originalApplicationId: applicationId,
+        },
+      ],
+    });
+
+    return { applicationId: newApplicationId, workflowId: newWorkflowId };
   }
 
   async listApplications(): Promise<ApplicationListItemDto[]> {

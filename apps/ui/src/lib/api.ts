@@ -12,10 +12,11 @@ async function request<T>(
   fetchFn?: typeof fetch,
 ): Promise<T> {
   const fn = fetchFn ?? fetch;
-  const res = await fn(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-    ...init,
-  });
+  const headers = new Headers(init?.headers);
+  if (init?.body !== undefined && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  const res = await fn(`${BASE}${path}`, { ...init, headers });
 
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
@@ -93,5 +94,21 @@ export async function submitCreditCheck(
   await request<void>(
     `/v1/applications/${encodeURIComponent(applicationId)}/credit-check`,
     { method: 'POST', body: JSON.stringify(payload) },
+  );
+}
+
+export async function retryCreditCheck(applicationId: string): Promise<void> {
+  await request<void>(
+    `/v1/applications/${encodeURIComponent(applicationId)}/retry-credit-check`,
+    { method: 'POST' },
+  );
+}
+
+export async function rerunApplication(
+  applicationId: string,
+): Promise<{ applicationId: string; workflowId: string }> {
+  return request<{ applicationId: string; workflowId: string }>(
+    `/v1/applications/${encodeURIComponent(applicationId)}/rerun`,
+    { method: 'POST' },
   );
 }

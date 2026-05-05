@@ -403,6 +403,101 @@ func TestMortgageApplicationWorkflow_Compensation(t *testing.T) {
 	assert.Equal(t, string(StatusCompensated), compCompleted.Metadata["status"])
 }
 
+// TestMortgageApplicationWorkflow_RetryCreditCheck verifies that when an operator
+// sends the RetryCreditCheckSignal the workflow records the operator_retry_credit_check
+// audit event, re-requests the credit check, and completes normally when the
+// CreditCheckCompleted signal subsequently arrives.
+func TestMortgageApplicationWorkflow_RetryCreditCheck(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	// First, send a retry signal while the workflow is waiting for credit result.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(RetryCreditCheckSignal, nil)
+	}, time.Second)
+
+	// Then deliver the actual credit result after the retry loop restarts.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 2, 0, 0, time.UTC),
+		})
+	}, 2*time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var result MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&result))
+	assert.Equal(t, StatusCompleted, result.Status)
+
+	var foundRetry bool
+	for _, e := range result.Timeline {
+		if e.Step == "operator_retry_credit_check" {
+			foundRetry = true
+			assert.Equal(t, testApplicationID, e.Metadata["applicationId"])
+		}
+	}
+	assert.True(t, foundRetry, "timeline must include operator_retry_credit_check entry")
+}
+
+// TestMortgageApplicationWorkflow_Rerun verifies that a workflow started with
+// OriginalApplicationID set records the operator_rerun_application audit entry and
+// otherwise completes the standard happy path.
+func TestMortgageApplicationWorkflow_Rerun(t *testing.T) {
+	const newAppID = "new-app-id"
+	const originalAppID = "original-app-id"
+
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID:         newAppID,
+		ApplicantName:         testApplicantName,
+		SubmittedAt:           time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		OriginalApplicationID: originalAppID,
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: newAppID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var result MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&result))
+	assert.Equal(t, StatusCompleted, result.Status)
+
+	var foundRerun bool
+	for _, e := range result.Timeline {
+		if e.Step == "operator_rerun_application" {
+			foundRerun = true
+			assert.Equal(t, originalAppID, e.Metadata["originalApplicationId"])
+		}
+	}
+	assert.True(t, foundRerun, "timeline must include operator_rerun_application entry")
+}
+
 // TestSearchAttributeKeys_Names verifies that the search attribute key names match
 // the strings that must be registered with the Temporal server.
 func TestSearchAttributeKeys_Names(t *testing.T) {

@@ -91,4 +91,40 @@ export class MortgageController {
       dto.reference,
     );
   }
+
+  @Post(':applicationId/retry-credit-check')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({ summary: 'Operator: retry credit check for an application' })
+  @ApiParam({
+    name: 'applicationId',
+    type: String,
+    example: MORTGAGE_EXAMPLE_APPLICATION_ID,
+  })
+  @ApiResponse({ status: 202, description: 'Retry signal accepted' })
+  @ApiResponse({
+    status: 404,
+    description: 'Application not found or not running',
+  })
+  retryCreditCheck(@Param('applicationId') applicationId: string) {
+    return this.mortgageService.retryCreditCheck(applicationId);
+  }
+
+  @Post(':applicationId/rerun')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Operator: re-run an application as a new workflow',
+  })
+  @ApiParam({
+    name: 'applicationId',
+    type: String,
+    example: MORTGAGE_EXAMPLE_APPLICATION_ID,
+  })
+  @ApiResponse({
+    status: 202,
+    description: 'New workflow started; returns new applicationId',
+  })
+  @ApiResponse({ status: 404, description: 'Application not found' })
+  rerunApplication(@Param('applicationId') applicationId: string) {
+    return this.mortgageService.rerunApplication(applicationId);
+  }
 }

@@ -151,6 +151,11 @@
   }
 
   // ── Form handlers ─────────────────────────────────────────────────────────
+  async function handleRerun(newApplicationId: string) {
+    await loadApplication(newApplicationId);
+    await refreshApplications();
+  }
+
   async function handleStart(e: SubmitEvent) {
     e.preventDefault();
     startLoading = true;
@@ -298,6 +303,7 @@
         {isTerminal}
         {isCreditCheckPending}
         onRefresh={doRefresh}
+        onRerun={handleRerun}
       />
     </div>
 
