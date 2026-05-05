@@ -43,6 +43,11 @@ func (Activities) RequestCreditCheck(ctx context.Context, input CreditCheckInput
 	logger.Info("simulating activity delay", "activity", "RequestCreditCheck", "delay", d)
 	time.Sleep(d)
 
+	if err := maybeFailExternalDependency("RequestCreditCheck", input.ExternalFailureRatePercent); err != nil {
+		logger.Warn("simulating external dependency failure", "activity", "RequestCreditCheck", "failureRatePercent", input.ExternalFailureRatePercent)
+		return CreditCheckRequestResult{}, err
+	}
+
 	reference := "CREDIT-REQ-" + input.ApplicationID
 
 	logger.Info("credit check requested; awaiting external result via signal",
@@ -67,6 +72,11 @@ func (Activities) ReserveOffer(ctx context.Context, input ReserveOfferInput) (Re
 	logger.Info("simulating activity delay", "activity", "ReserveOffer", "delay", d)
 	time.Sleep(d)
 
+	if err := maybeFailExternalDependency("ReserveOffer", input.ExternalFailureRatePercent); err != nil {
+		logger.Warn("simulating external dependency failure", "activity", "ReserveOffer", "failureRatePercent", input.ExternalFailureRatePercent)
+		return ReserveOfferResult{}, err
+	}
+
 	offerID := "OFFER-" + input.ApplicationID
 
 	logger.Info("offer reserved",
@@ -88,6 +98,11 @@ func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (Re
 	d := randomActivityDelay()
 	logger.Info("simulating activity delay", "activity", "ReleaseOffer", "delay", d)
 	time.Sleep(d)
+
+	if err := maybeFailExternalDependency("ReleaseOffer", input.ExternalFailureRatePercent); err != nil {
+		logger.Warn("simulating external dependency failure", "activity", "ReleaseOffer", "failureRatePercent", input.ExternalFailureRatePercent)
+		return ReleaseOfferResult{}, err
+	}
 
 	logger.Info("offer released",
 		"applicationId", input.ApplicationID,
@@ -112,6 +127,11 @@ func (Activities) CompleteApplication(ctx context.Context, input CompleteApplica
 	d := randomActivityDelay()
 	logger.Info("simulating activity delay", "activity", "CompleteApplication", "delay", d)
 	time.Sleep(d)
+
+	if err := maybeFailExternalDependency("CompleteApplication", input.ExternalFailureRatePercent); err != nil {
+		logger.Warn("simulating external dependency failure", "activity", "CompleteApplication", "failureRatePercent", input.ExternalFailureRatePercent)
+		return CompleteApplicationResult{}, err
+	}
 
 	if input.SimulateFailure && info.Attempt <= 4 {
 		logger.Warn("simulating completion failure for demo; Temporal will retry",

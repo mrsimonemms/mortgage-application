@@ -64,6 +64,7 @@
   let startId = $state(crypto.randomUUID());
   let startName = $state(defaultName);
   let startScenario = $state('happy_path');
+  let startFailureRate = $state(0);
   let startError = $state('');
   let startLoading = $state(false);
 
@@ -79,14 +80,27 @@
   // ── Derived ─────────────────────────────────────────────────────────────
   const TERMINAL = new Set(['completed', 'rejected', 'compensated']);
 
+  function allowsFailureInjection(scenario: string): boolean {
+    return scenario === 'happy_path';
+  }
+
   const scenarioOptions = $derived(
     scenarios.length > 0 ? scenarios : DEFAULT_SCENARIOS,
   );
   const selectedDesc = $derived(
     scenarioOptions.find((s) => s.name === startScenario)?.description ?? '',
   );
+  const showFailureSlider = $derived(allowsFailureInjection(startScenario));
   const isCreditCheckPending = $derived(app?.status === 'credit_check_pending');
   const isTerminal = $derived(app ? TERMINAL.has(app.status) : false);
+
+  // Reset failure rate when switching away from happy_path so the slider
+  // always starts at 0 when the user returns to happy_path.
+  $effect(() => {
+    if (!allowsFailureInjection(startScenario)) {
+      startFailureRate = 0;
+    }
+  });
 
   // ── Sync from load data on navigation ───────────────────────────────────
   // The untrack snapshots above are initialised once. This effect re-syncs
@@ -165,6 +179,9 @@
         applicationId: startId,
         applicantName: startName.trim(),
         scenario: startScenario,
+        externalFailureRatePercent: allowsFailureInjection(startScenario)
+          ? startFailureRate
+          : 0,
       });
       const launched = startId;
       startId = crypto.randomUUID();
@@ -201,40 +218,75 @@
   <section class="card">
     <h2>Start Application</h2>
     <form onsubmit={handleStart} class="start-form">
-      <div class="field">
-        <label for="start-id">Application ID</label>
-        <div class="input-row">
-          <input
-            id="start-id"
-            type="text"
-            bind:value={startId}
-            placeholder="UUID"
-            required
-            class="mono"
-          />
-          <button
-            type="button"
-            class="btn-secondary"
-            onclick={() => (startId = crypto.randomUUID())}>New</button
-          >
+      <!-- Bank application fields -->
+      <div class="form-bank">
+        <div class="field">
+          <label for="start-id">Application ID</label>
+          <div class="input-row">
+            <input
+              id="start-id"
+              type="text"
+              bind:value={startId}
+              placeholder="UUID"
+              required
+              class="mono"
+            />
+            <button
+              type="button"
+              class="btn-secondary"
+              onclick={() => (startId = crypto.randomUUID())}>New</button
+            >
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="start-name">Applicant Name</label>
+          <input id="start-name" type="text" bind:value={startName} required />
         </div>
       </div>
 
-      <div class="field">
-        <label for="start-name">Applicant Name</label>
-        <input id="start-name" type="text" bind:value={startName} required />
-      </div>
+      <!-- Temporal demo controls -->
+      <div class="demo-controls">
+        <p class="demo-controls-title">Temporal Demo Controls</p>
+        <p class="demo-controls-hint">
+          These controls simulate demo conditions such as workflow scenarios and
+          unreliable external dependencies. They are not bank operator controls.
+        </p>
+        <div class="demo-fields">
+          <div class="field">
+            <label for="start-scenario">Scenario</label>
+            <select id="start-scenario" bind:value={startScenario}>
+              {#each scenarioOptions as s (s.name)}
+                <option value={s.name}>{s.name}</option>
+              {/each}
+            </select>
+            {#if selectedDesc}
+              <p class="hint">{selectedDesc}</p>
+            {/if}
+          </div>
 
-      <div class="field">
-        <label for="start-scenario">Scenario</label>
-        <select id="start-scenario" bind:value={startScenario}>
-          {#each scenarioOptions as s (s.name)}
-            <option value={s.name}>{s.name}</option>
-          {/each}
-        </select>
-        {#if selectedDesc}
-          <p class="hint">{selectedDesc}</p>
-        {/if}
+          {#if showFailureSlider}
+            <div class="field">
+              <label for="start-failure-rate"
+                >External failure rate <span class="rate-value"
+                  >{startFailureRate}%</span
+                ></label
+              >
+              <input
+                id="start-failure-rate"
+                type="range"
+                min="0"
+                max="75"
+                step="5"
+                bind:value={startFailureRate}
+              />
+              <p class="hint">
+                Simulates flaky external systems by randomly failing eligible
+                activities. Temporal retries should absorb transient failures.
+              </p>
+            </div>
+          {/if}
+        </div>
       </div>
 
       {#if startError}
@@ -372,29 +424,67 @@
 
   /* ── Start form layout ──────────────────────────────────────────────────── */
   .start-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .form-bank {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 20px;
+    align-items: start;
+    padding-bottom: 20px;
+  }
+
+  @media (max-width: 700px) {
+    .form-bank {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* ── Demo controls section ───────────────────────────────────────────────── */
+  .demo-controls {
+    border-top: 1px solid #e5e7eb;
+    padding-top: 20px;
+  }
+
+  .demo-controls-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #374151;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0 0 6px;
+  }
+
+  .demo-controls-hint {
+    font-size: 12px;
+    color: #6b7280;
+    margin: 0 0 16px;
+  }
+
+  .demo-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 0 20px;
     align-items: start;
   }
 
-  .start-form .field {
-    margin-bottom: 0;
-  }
-
-  .start-form .error {
-    grid-column: 1 / -1;
-    margin-bottom: 0;
-  }
-
-  .start-form button[type='submit'] {
-    align-self: end;
-  }
-
   @media (max-width: 700px) {
-    .start-form {
+    .demo-fields {
       grid-template-columns: 1fr;
     }
+  }
+
+  .rate-value {
+    font-weight: 600;
+    color: #1d4ed8;
+  }
+
+  input[type='range'] {
+    width: 100%;
+    accent-color: #1d4ed8;
   }
 
   .input-row {

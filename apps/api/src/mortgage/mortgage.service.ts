@@ -102,6 +102,7 @@ export class MortgageService {
     applicationId: string,
     applicantName: string,
     scenario?: MortgageScenario,
+    externalFailureRatePercent?: number,
   ): Promise<{ workflowId: string; applicationId: string }> {
     const workflowId = this.workflowId(applicationId);
 
@@ -117,17 +118,26 @@ export class MortgageService {
     );
 
     const resolvedScenario = scenario ?? 'happy_path';
+    const resolvedFailureRate = this.allowsFailureInjection(resolvedScenario)
+      ? (externalFailureRatePercent ?? 0)
+      : 0;
 
     await this.client.workflow.start(WORKFLOW_TYPE, {
       taskQueue: TASK_QUEUE,
       workflowId,
-      memo: { applicationId, applicantName, scenario: resolvedScenario },
+      memo: {
+        applicationId,
+        applicantName,
+        scenario: resolvedScenario,
+        externalFailureRatePercent: resolvedFailureRate,
+      },
       args: [
         {
           applicationId,
           applicantName,
           submittedAt: new Date().toISOString(),
           scenario: resolvedScenario,
+          externalFailureRatePercent: resolvedFailureRate,
         },
       ],
     });
@@ -158,6 +168,7 @@ export class MortgageService {
 
     let applicantName = '';
     let scenario = 'happy_path';
+    let externalFailureRatePercent = 0;
 
     try {
       const desc = await this.client.workflow
@@ -166,6 +177,9 @@ export class MortgageService {
       const memo = this.readMemo(desc.memo);
       applicantName = memo.applicantName ?? '';
       scenario = memo.scenario ?? 'happy_path';
+      externalFailureRatePercent = this.allowsFailureInjection(scenario)
+        ? (memo.externalFailureRatePercent ?? 0)
+        : 0;
     } catch (err) {
       if (err instanceof WorkflowNotFoundError) {
         throw new NotFoundException(`Application ${applicationId} not found`);
@@ -184,7 +198,12 @@ export class MortgageService {
     await this.client.workflow.start(WORKFLOW_TYPE, {
       taskQueue: TASK_QUEUE,
       workflowId: newWorkflowId,
-      memo: { applicationId: newApplicationId, applicantName, scenario },
+      memo: {
+        applicationId: newApplicationId,
+        applicantName,
+        scenario,
+        externalFailureRatePercent,
+      },
       args: [
         {
           applicationId: newApplicationId,
@@ -192,6 +211,7 @@ export class MortgageService {
           submittedAt: new Date().toISOString(),
           scenario,
           originalApplicationId: applicationId,
+          externalFailureRatePercent,
         },
       ],
     });
@@ -279,10 +299,15 @@ export class MortgageService {
     return this.toApplicationListItem(info.workflowId, workflowStatus, {});
   }
 
+  private allowsFailureInjection(scenario: string): boolean {
+    return scenario === 'happy_path';
+  }
+
   private readMemo(memo: Record<string, unknown> | undefined): {
     applicationId?: string;
     applicantName?: string;
     scenario?: string;
+    externalFailureRatePercent?: number;
   } {
     if (!memo) return {};
     return {
@@ -296,6 +321,10 @@ export class MortgageService {
           : undefined,
       scenario:
         typeof memo['scenario'] === 'string' ? memo['scenario'] : undefined,
+      externalFailureRatePercent:
+        typeof memo['externalFailureRatePercent'] === 'number'
+          ? memo['externalFailureRatePercent']
+          : undefined,
     };
   }
 

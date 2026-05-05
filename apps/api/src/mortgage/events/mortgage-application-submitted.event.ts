@@ -5,4 +5,5 @@ export interface MortgageApplicationSubmitted {
   applicantName: string;
   submittedAt: string;
   scenario?: MortgageScenario;
+  externalFailureRatePercent?: number;
 }

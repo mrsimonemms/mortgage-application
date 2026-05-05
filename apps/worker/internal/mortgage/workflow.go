@@ -49,6 +49,7 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 	})
 
 	acts := activities.Activities{}
+	failureRate := event.ExternalFailureRatePercent
 
 	// Compensation runs in LIFO order from a disconnected context whenever the
 	// workflow is returning a non-nil error and at least one step registered a
@@ -80,7 +81,7 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 	}
 
 	var creditResult CreditCheckCompleted
-	if creditResult, err = requestAndWaitCreditCheck(ctx, actCtx, &app, acts); err != nil {
+	if creditResult, err = requestAndWaitCreditCheck(ctx, actCtx, &app, acts, failureRate); err != nil {
 		return
 	}
 
@@ -102,7 +103,7 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 	}
 	recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check approved", meta)
 
-	if err = runOfferReservation(ctx, actCtx, &app, acts); err != nil {
+	if err = runOfferReservation(ctx, actCtx, &app, acts, failureRate); err != nil {
 		return
 	}
 
@@ -112,10 +113,10 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 	registeredAppID := app.ApplicationID
 	registeredOfferID := app.OfferID
 	comp.Add(func(compCtx workflow.Context) error {
-		return compensateReleaseOffer(compCtx, &app, acts, registeredAppID, registeredOfferID)
+		return compensateReleaseOffer(compCtx, &app, acts, registeredAppID, registeredOfferID, failureRate)
 	})
 
-	if err = runCompleteApplication(ctx, &app, acts, event.Scenario); err != nil {
+	if err = runCompleteApplication(ctx, &app, acts, event.Scenario, failureRate); err != nil {
 		// Record the failure before the deferred compensator runs so the audit
 		// trail shows the fulfilment failure ahead of the compensation entries.
 		recordTimeline(&app, ctx, "fulfilment", TimelineFailed,
@@ -151,14 +152,15 @@ func runIntake(ctx, actCtx workflow.Context, app *MortgageApplication, acts acti
 	return nil
 }
 
-func requestCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
+func requestCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) error {
 	app.Status = StatusCreditCheckPending
 	app.CurrentStep = "credit_check"
 	upsertSearchAttributes(ctx, app, false)
 
 	var result activities.CreditCheckRequestResult
 	if err := workflow.ExecuteActivity(actCtx, acts.RequestCreditCheck, activities.CreditCheckInput{
-		ApplicationID: app.ApplicationID,
+		ApplicationID:              app.ApplicationID,
+		ExternalFailureRatePercent: failureRate,
 	}).Get(ctx, &result); err != nil {
 		return err
 	}
@@ -174,9 +176,9 @@ func requestCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, 
 // operator sends a RetryCreditCheckSignal while the workflow is waiting, the credit
 // check is re-requested and the wait restarts. This loop continues until a result
 // arrives. Each operator retry records an operator_retry_credit_check audit entry.
-func requestAndWaitCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) (CreditCheckCompleted, error) {
+func requestAndWaitCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) (CreditCheckCompleted, error) {
 	for {
-		if err := requestCreditCheck(ctx, actCtx, app, acts); err != nil {
+		if err := requestCreditCheck(ctx, actCtx, app, acts, failureRate); err != nil {
 			return CreditCheckCompleted{}, err
 		}
 
@@ -221,14 +223,15 @@ func waitForCreditResultOrRetry(ctx workflow.Context, app *MortgageApplication) 
 	return result, retried
 }
 
-func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
+func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) error {
 	app.CurrentStep = "offer_reservation"
 	recordTimeline(app, ctx, "offer_reservation", TimelineStarted, "Offer reservation started")
 	upsertSearchAttributes(ctx, app, false)
 
 	var result activities.ReserveOfferResult
 	if err := workflow.ExecuteActivity(actCtx, acts.ReserveOffer, activities.ReserveOfferInput{
-		ApplicationID: app.ApplicationID,
+		ApplicationID:              app.ApplicationID,
+		ExternalFailureRatePercent: failureRate,
 	}).Get(ctx, &result); err != nil {
 		return err
 	}
@@ -250,7 +253,7 @@ func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication,
 // fail_after_offer_reservation: fails on attempts 1–4, succeeds on attempt 5.
 // fail_and_compensate_after_offer_reservation: fails on all 3 attempts, exhausting
 // the retry policy. The caller is responsible for triggering compensation.
-func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, scenario WorkflowScenario) error {
+func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, scenario WorkflowScenario, failureRate int) error {
 	retryPolicy := &temporal.RetryPolicy{
 		InitialInterval:    time.Second,
 		BackoffCoefficient: 2.0,
@@ -282,9 +285,10 @@ func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts
 
 	var result activities.CompleteApplicationResult
 	if err := workflow.ExecuteActivity(actCtx, acts.CompleteApplication, activities.CompleteApplicationInput{
-		ApplicationID:   app.ApplicationID,
-		OfferID:         app.OfferID,
-		SimulateFailure: simulateFailure,
+		ApplicationID:              app.ApplicationID,
+		OfferID:                    app.OfferID,
+		SimulateFailure:            simulateFailure,
+		ExternalFailureRatePercent: failureRate,
 	}).Get(ctx, &result); err != nil {
 		return err
 	}
@@ -305,7 +309,7 @@ func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts
 // context is cancelled on failure. applicationID and offerID are passed explicitly
 // rather than read from app to ensure the correct values are used even if app is
 // mutated between registration and execution.
-func compensateReleaseOffer(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, applicationID, offerID string) error {
+func compensateReleaseOffer(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, applicationID, offerID string, failureRate int) error {
 	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
 	})
@@ -316,8 +320,9 @@ func compensateReleaseOffer(ctx workflow.Context, app *MortgageApplication, acts
 
 	var result activities.ReleaseOfferResult
 	if err := workflow.ExecuteActivity(actCtx, acts.ReleaseOffer, activities.ReleaseOfferInput{
-		ApplicationID: applicationID,
-		OfferID:       offerID,
+		ApplicationID:              applicationID,
+		OfferID:                    offerID,
+		ExternalFailureRatePercent: failureRate,
 	}).Get(ctx, &result); err != nil {
 		return err
 	}

@@ -42,6 +42,7 @@ export class MortgageController {
       dto.applicationId,
       dto.applicantName,
       dto.scenario,
+      dto.externalFailureRatePercent,
     );
   }
 

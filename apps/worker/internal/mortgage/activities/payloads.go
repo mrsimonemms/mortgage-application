@@ -13,7 +13,8 @@ type IntakeResult struct {
 }
 
 type CreditCheckInput struct {
-	ApplicationID string `json:"applicationId"`
+	ApplicationID              string `json:"applicationId"`
+	ExternalFailureRatePercent int    `json:"externalFailureRatePercent,omitempty"`
 }
 
 // CreditCheckRequestResult is returned by RequestCreditCheck to confirm the
@@ -31,7 +32,8 @@ type CreditCheckOutput struct {
 }
 
 type ReserveOfferInput struct {
-	ApplicationID string `json:"applicationId"`
+	ApplicationID              string `json:"applicationId"`
+	ExternalFailureRatePercent int    `json:"externalFailureRatePercent,omitempty"`
 }
 
 type ReserveOfferResult struct {
@@ -46,7 +48,8 @@ type CompleteApplicationInput struct {
 	// SimulateFailure causes the activity to fail on the first four attempts and
 	// succeed on the fifth, demonstrating Temporal's automatic retry behaviour.
 	// Used for the fail_after_offer_reservation demo scenario only.
-	SimulateFailure bool `json:"simulateFailure,omitempty"`
+	SimulateFailure            bool `json:"simulateFailure,omitempty"`
+	ExternalFailureRatePercent int  `json:"externalFailureRatePercent,omitempty"`
 }
 
 type CompleteApplicationResult struct {
@@ -55,8 +58,9 @@ type CompleteApplicationResult struct {
 }
 
 type ReleaseOfferInput struct {
-	ApplicationID string `json:"applicationId"`
-	OfferID       string `json:"offerId"`
+	ApplicationID              string `json:"applicationId"`
+	OfferID                    string `json:"offerId"`
+	ExternalFailureRatePercent int    `json:"externalFailureRatePercent,omitempty"`
 }
 
 type ReleaseOfferResult struct {
