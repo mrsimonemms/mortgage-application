@@ -10,6 +10,10 @@ import (
 	"go.temporal.io/sdk/testsuite"
 )
 
+func init() {
+	DisableActivityDelaysForTests()
+}
+
 func newTestEnv(t *testing.T) *testsuite.TestActivityEnvironment {
 	t.Helper()
 	suite := &testsuite.WorkflowTestSuite{}
