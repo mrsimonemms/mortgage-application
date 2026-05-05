@@ -6,8 +6,8 @@ import (
 
 	gh "github.com/mrsimonemms/golang-helpers"
 	"github.com/mrsimonemms/golang-helpers/temporal"
-	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage"
-	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage/activities"
+	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/mortgage"
+	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/mortgage/activities"
 	"github.com/mrsimonemms/temporal-codec-server/packages/golang/algorithms/aes"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"

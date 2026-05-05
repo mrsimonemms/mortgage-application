@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage/activities"
+	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/mortgage/activities"
 	"github.com/stretchr/testify/assert"
 	"go.temporal.io/sdk/testsuite"
 )
