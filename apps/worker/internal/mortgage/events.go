@@ -19,11 +19,12 @@ const (
 )
 
 type MortgageApplicationSubmitted struct {
-	ApplicationID         string           `json:"applicationId"`
-	ApplicantName         string           `json:"applicantName"`
-	SubmittedAt           time.Time        `json:"submittedAt"`
-	Scenario              WorkflowScenario `json:"scenario,omitempty"`
-	OriginalApplicationID string           `json:"originalApplicationId,omitempty"`
+	ApplicationID              string           `json:"applicationId"`
+	ApplicantName              string           `json:"applicantName"`
+	SubmittedAt                time.Time        `json:"submittedAt"`
+	Scenario                   WorkflowScenario `json:"scenario,omitempty"`
+	OriginalApplicationID      string           `json:"originalApplicationId,omitempty"`
+	ExternalFailureRatePercent int              `json:"externalFailureRatePercent,omitempty"`
 }
 
 type CreditCheckResult string

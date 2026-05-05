@@ -174,6 +174,38 @@ func TestCompleteApplication(t *testing.T) {
 	})
 }
 
+func TestMaybeFailExternalDependency(t *testing.T) {
+	t.Run("never fails when rate is zero", func(t *testing.T) {
+		for range 200 {
+			assert.NoError(t, maybeFailExternalDependency("TestActivity", 0))
+		}
+	})
+
+	t.Run("never fails when rate is negative", func(t *testing.T) {
+		for range 200 {
+			assert.NoError(t, maybeFailExternalDependency("TestActivity", -10))
+		}
+	})
+
+	t.Run("error message includes activity name", func(t *testing.T) {
+		// Override randIntn so it always returns 0, guaranteeing failure.
+		orig := randIntn
+		randIntn = func(_ int) int { return 0 }
+		defer func() { randIntn = orig }()
+
+		err := maybeFailExternalDependency("MyActivity", MaxExternalFailureRatePercent)
+		if assert.Error(t, err) {
+			assert.Contains(t, err.Error(), "MyActivity")
+		}
+	})
+
+	t.Run("values above max are clamped rather than causing a panic", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			_ = maybeFailExternalDependency("TestActivity", 999)
+		})
+	})
+}
+
 func TestReleaseOffer(t *testing.T) {
 	t.Run("releases an offer successfully", func(t *testing.T) {
 		env := newTestEnv(t)

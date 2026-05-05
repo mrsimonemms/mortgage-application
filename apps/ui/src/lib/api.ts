@@ -60,6 +60,7 @@ export interface StartApplicationPayload {
   applicationId: string;
   applicantName: string;
   scenario: string;
+  externalFailureRatePercent?: number;
 }
 
 export async function startApplication(

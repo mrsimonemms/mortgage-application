@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 import {
   MORTGAGE_EXAMPLE_APPLICANT_NAME,
@@ -32,4 +32,17 @@ export class StartMortgageApplicationDto {
   @IsOptional()
   @IsIn(MORTGAGE_SCENARIOS.map((s) => s.name))
   scenario?: MortgageScenario;
+
+  @ApiPropertyOptional({
+    description:
+      'Temporal demo control: probability (0–75) that each eligible activity fails on a given attempt. Temporal retries absorb transient failures. Defaults to 0 (no injected failures).',
+    minimum: 0,
+    maximum: 75,
+    example: 0,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(75)
+  externalFailureRatePercent?: number;
 }
