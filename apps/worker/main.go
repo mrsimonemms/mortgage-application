@@ -42,7 +42,7 @@ func exec() error {
 				Msg:   "Unable to read keys file",
 			}
 		}
-		opts = append(opts, temporal.WithDataConverter(aes.DataConverter(keys)))
+		opts = append(opts, temporal.WithDataAndFailureConverter(aes.DataConverter(keys)))
 	}
 
 	// The client is a heavyweight object that should be created once per process.
