@@ -4,7 +4,7 @@ import (
 	"time"
 
 	saga "github.com/mrsimonemms/golang-helpers/temporal"
-	"github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker/internal/mortgage/activities"
+	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/mortgage/activities"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )

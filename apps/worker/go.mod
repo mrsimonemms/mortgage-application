@@ -1,4 +1,4 @@
-module github.com/mrsimonemms/mortgage-application/mortgage-application/apps/worker
+module github.com/mrsimonemms/mortgage-application/apps/worker
 
 go 1.26
 
