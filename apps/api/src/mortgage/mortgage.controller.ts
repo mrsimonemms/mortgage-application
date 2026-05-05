@@ -17,8 +17,8 @@ import {
 } from '@nestjs/swagger';
 
 import { MORTGAGE_EXAMPLE_APPLICATION_ID } from './constants';
+import { ApplicationActionDto } from './dto/application-action.dto';
 import { ApplicationListItemDto } from './dto/application-list-item.dto';
-import { CreditCheckDto } from './dto/credit-check.dto';
 import { StartMortgageApplicationDto } from './dto/start-mortgage-application.dto';
 import {
   MORTGAGE_SCENARIOS,
@@ -71,60 +71,22 @@ export class MortgageController {
     return this.mortgageService.getApplication(applicationId);
   }
 
-  @Post(':applicationId/credit-check')
+  @Post(':applicationId/actions')
   @HttpCode(HttpStatus.ACCEPTED)
-  @ApiOperation({ summary: 'Submit credit check result for an application' })
+  @ApiOperation({ summary: 'Perform an operator action on an application' })
   @ApiParam({
     name: 'applicationId',
     type: String,
     example: MORTGAGE_EXAMPLE_APPLICATION_ID,
   })
-  @ApiBody({ type: CreditCheckDto })
-  @ApiResponse({ status: 202, description: 'Signal accepted' })
-  completeCreditCheck(
-    @Param('applicationId') applicationId: string,
-    @Body() dto: CreditCheckDto,
-  ) {
-    return this.mortgageService.completeCreditCheck(
-      applicationId,
-      dto.result,
-      dto.reference,
-    );
-  }
-
-  @Post(':applicationId/retry-credit-check')
-  @HttpCode(HttpStatus.ACCEPTED)
-  @ApiOperation({ summary: 'Operator: retry credit check for an application' })
-  @ApiParam({
-    name: 'applicationId',
-    type: String,
-    example: MORTGAGE_EXAMPLE_APPLICATION_ID,
-  })
-  @ApiResponse({ status: 202, description: 'Retry signal accepted' })
-  @ApiResponse({
-    status: 404,
-    description: 'Application not found or not running',
-  })
-  retryCreditCheck(@Param('applicationId') applicationId: string) {
-    return this.mortgageService.retryCreditCheck(applicationId);
-  }
-
-  @Post(':applicationId/rerun')
-  @HttpCode(HttpStatus.ACCEPTED)
-  @ApiOperation({
-    summary: 'Operator: re-run an application as a new workflow',
-  })
-  @ApiParam({
-    name: 'applicationId',
-    type: String,
-    example: MORTGAGE_EXAMPLE_APPLICATION_ID,
-  })
-  @ApiResponse({
-    status: 202,
-    description: 'New workflow started; returns new applicationId',
-  })
+  @ApiBody({ type: ApplicationActionDto })
+  @ApiResponse({ status: 202, description: 'Action accepted' })
+  @ApiResponse({ status: 400, description: 'Invalid action or payload' })
   @ApiResponse({ status: 404, description: 'Application not found' })
-  rerunApplication(@Param('applicationId') applicationId: string) {
-    return this.mortgageService.rerunApplication(applicationId);
+  performAction(
+    @Param('applicationId') applicationId: string,
+    @Body() dto: ApplicationActionDto,
+  ) {
+    return this.mortgageService.handleAction(applicationId, dto);
   }
 }
