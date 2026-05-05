@@ -14,7 +14,12 @@ import (
 type Activities struct{}
 
 // Intake validates and records the receipt of a mortgage application.
-func (Activities) Intake(_ context.Context, input IntakeInput) (IntakeResult, error) {
+func (Activities) Intake(ctx context.Context, input IntakeInput) (IntakeResult, error) {
+	logger := activity.GetLogger(ctx)
+	d := randomActivityDelay()
+	logger.Info("simulating activity delay", "activity", "Intake", "delay", d)
+	time.Sleep(d)
+
 	if input.ApplicationID == "" {
 		return IntakeResult{}, fmt.Errorf("intake failed: applicationId is required")
 	}
@@ -34,6 +39,10 @@ func (Activities) Intake(_ context.Context, input IntakeInput) (IntakeResult, er
 // via the credit-check-completed signal sent through the API.
 func (Activities) RequestCreditCheck(ctx context.Context, input CreditCheckInput) (CreditCheckRequestResult, error) {
 	logger := activity.GetLogger(ctx)
+	d := randomActivityDelay()
+	logger.Info("simulating activity delay", "activity", "RequestCreditCheck", "delay", d)
+	time.Sleep(d)
+
 	reference := "CREDIT-REQ-" + input.ApplicationID
 
 	logger.Info("credit check requested; awaiting external result via signal",
@@ -54,6 +63,10 @@ func (Activities) RequestCreditCheck(ctx context.Context, input CreditCheckInput
 // offer ID is stable and can be passed directly to ReleaseOffer.
 func (Activities) ReserveOffer(ctx context.Context, input ReserveOfferInput) (ReserveOfferResult, error) {
 	logger := activity.GetLogger(ctx)
+	d := randomActivityDelay()
+	logger.Info("simulating activity delay", "activity", "ReserveOffer", "delay", d)
+	time.Sleep(d)
+
 	offerID := "OFFER-" + input.ApplicationID
 
 	logger.Info("offer reserved",
@@ -72,6 +85,9 @@ func (Activities) ReserveOffer(ctx context.Context, input ReserveOfferInput) (Re
 // This is the compensating action for ReserveOffer.
 func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (ReleaseOfferResult, error) {
 	logger := activity.GetLogger(ctx)
+	d := randomActivityDelay()
+	logger.Info("simulating activity delay", "activity", "ReleaseOffer", "delay", d)
+	time.Sleep(d)
 
 	logger.Info("offer released",
 		"applicationId", input.ApplicationID,
@@ -93,6 +109,9 @@ func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (Re
 func (Activities) CompleteApplication(ctx context.Context, input CompleteApplicationInput) (CompleteApplicationResult, error) {
 	logger := activity.GetLogger(ctx)
 	info := activity.GetInfo(ctx)
+	d := randomActivityDelay()
+	logger.Info("simulating activity delay", "activity", "CompleteApplication", "delay", d)
+	time.Sleep(d)
 
 	if input.SimulateFailure && info.Attempt <= 4 {
 		logger.Warn("simulating completion failure for demo; Temporal will retry",
