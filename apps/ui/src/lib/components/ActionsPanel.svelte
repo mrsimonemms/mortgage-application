@@ -8,17 +8,25 @@
     isTerminal,
     isCreditCheckPending,
     onRefresh,
+    onRerun,
   }: {
     app: MortgageApplication;
     isTerminal: boolean;
     isCreditCheckPending: boolean;
     onRefresh: () => Promise<void>;
+    onRerun: (applicationId: string) => Promise<void>;
   } = $props();
 
   let creditResult: 'approved' | 'rejected' = $state('approved');
   let creditRef = $state('');
   let creditError = $state('');
   let creditLoading = $state(false);
+
+  let retryError = $state('');
+  let retryLoading = $state(false);
+
+  let rerunError = $state('');
+  let rerunLoading = $state(false);
 
   async function handleCreditCheck(e: SubmitEvent) {
     e.preventDefault();
@@ -36,6 +44,34 @@
         err instanceof Error ? err.message : 'Failed to submit credit check';
     } finally {
       creditLoading = false;
+    }
+  }
+
+  async function handleRetryCreditCheck() {
+    retryLoading = true;
+    retryError = '';
+    try {
+      await api.retryCreditCheck(app.applicationId);
+      await onRefresh();
+    } catch (err) {
+      retryError =
+        err instanceof Error ? err.message : 'Failed to retry credit check';
+    } finally {
+      retryLoading = false;
+    }
+  }
+
+  async function handleRerun() {
+    rerunLoading = true;
+    rerunError = '';
+    try {
+      const result = await api.rerunApplication(app.applicationId);
+      await onRerun(result.applicationId);
+    } catch (err) {
+      rerunError =
+        err instanceof Error ? err.message : 'Failed to re-run application';
+    } finally {
+      rerunLoading = false;
     }
   }
 </script>
@@ -86,6 +122,40 @@
       automatically via Temporal.
     </p>
   {/if}
+
+  <div class="operator-section">
+    <h3>Operator Controls</h3>
+    <div class="operator-actions">
+      <div class="operator-action">
+        <button
+          type="button"
+          class="btn-secondary"
+          onclick={handleRetryCreditCheck}
+          disabled={retryLoading || isTerminal}
+        >
+          {retryLoading ? 'Retrying…' : 'Retry Credit Check'}
+        </button>
+        <p class="hint">Re-request the credit check for this application.</p>
+        {#if retryError}
+          <p class="error">{retryError}</p>
+        {/if}
+      </div>
+      <div class="operator-action">
+        <button
+          type="button"
+          class="btn-secondary"
+          onclick={handleRerun}
+          disabled={rerunLoading}
+        >
+          {rerunLoading ? 'Re-running…' : 'Re-run Application'}
+        </button>
+        <p class="hint">Start a new workflow with the same inputs.</p>
+        {#if rerunError}
+          <p class="error">{rerunError}</p>
+        {/if}
+      </div>
+    </div>
+  </div>
 </section>
 
 <style>
@@ -105,5 +175,35 @@
 
   .action-block .hint {
     margin-bottom: 12px;
+  }
+
+  .operator-section {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .operator-section h3 {
+    font-size: 13px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 10px;
+  }
+
+  .operator-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .operator-action button {
+    width: 100%;
+  }
+
+  .operator-action .hint {
+    font-size: 12px;
+    color: #6b7280;
+    margin-top: 4px;
+    margin-bottom: 0;
   }
 </style>

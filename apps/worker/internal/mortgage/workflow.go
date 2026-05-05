@@ -66,17 +66,23 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		"applicationId": app.ApplicationID,
 		"applicantName": app.ApplicantName,
 	})
+
+	if event.OriginalApplicationID != "" {
+		recordTimeline(&app, ctx, "operator_rerun_application", TimelineCompleted,
+			"Application re-run by operator",
+			map[string]string{"originalApplicationId": event.OriginalApplicationID})
+	}
+
 	upsertSearchAttributes(ctx, &app, false)
 
 	if err = runIntake(ctx, actCtx, &app, acts); err != nil {
 		return
 	}
 
-	if err = requestCreditCheck(ctx, actCtx, &app, acts); err != nil {
+	var creditResult CreditCheckCompleted
+	if creditResult, err = requestAndWaitCreditCheck(ctx, actCtx, &app, acts); err != nil {
 		return
 	}
-
-	creditResult := waitForCreditResult(ctx, &app)
 
 	if creditResult.Result == CreditCheckRejected {
 		app.Status = StatusRejected
@@ -164,20 +170,55 @@ func requestCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, 
 	return nil
 }
 
-// waitForCreditResult blocks the workflow durably until the CreditCheckCompleted signal
-// arrives. AwaitingExternalSignal is set true before blocking so the query handler
-// and search attributes both reflect the durable pause while the workflow is suspended.
-func waitForCreditResult(ctx workflow.Context, app *MortgageApplication) CreditCheckCompleted {
+// requestAndWaitCreditCheck requests a credit check and waits for the result. If the
+// operator sends a RetryCreditCheckSignal while the workflow is waiting, the credit
+// check is re-requested and the wait restarts. This loop continues until a result
+// arrives. Each operator retry records an operator_retry_credit_check audit entry.
+func requestAndWaitCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) (CreditCheckCompleted, error) {
+	for {
+		if err := requestCreditCheck(ctx, actCtx, app, acts); err != nil {
+			return CreditCheckCompleted{}, err
+		}
+
+		result, retried := waitForCreditResultOrRetry(ctx, app)
+		if !retried {
+			return result, nil
+		}
+
+		recordTimeline(app, ctx, "operator_retry_credit_check", TimelineCompleted,
+			"Operator requested credit check retry",
+			map[string]string{"applicationId": app.ApplicationID})
+	}
+}
+
+// waitForCreditResultOrRetry blocks the workflow durably until either the
+// CreditCheckCompleted signal or the RetryCreditCheckSignal arrives. Returns the
+// credit result and retried=false on a normal result, or zero value and retried=true
+// when the operator requests a retry. AwaitingExternalSignal is set while blocked.
+func waitForCreditResultOrRetry(ctx workflow.Context, app *MortgageApplication) (CreditCheckCompleted, bool) {
 	app.CurrentStep = "awaiting_credit_result"
 	recordTimeline(app, ctx, "credit_check", TimelineWaiting, "Awaiting credit bureau result")
 	upsertSearchAttributes(ctx, app, true)
 
+	creditCheckCh := workflow.GetSignalChannel(ctx, CreditCheckCompletedSignal)
+	retryCh := workflow.GetSignalChannel(ctx, RetryCreditCheckSignal)
+
 	var result CreditCheckCompleted
-	workflow.GetSignalChannel(ctx, CreditCheckCompletedSignal).Receive(ctx, &result)
+	var retried bool
+
+	workflow.NewSelector(ctx).
+		AddReceive(creditCheckCh, func(c workflow.ReceiveChannel, _ bool) {
+			c.Receive(ctx, &result)
+		}).
+		AddReceive(retryCh, func(c workflow.ReceiveChannel, _ bool) {
+			c.Receive(ctx, nil)
+			retried = true
+		}).
+		Select(ctx)
 
 	upsertSearchAttributes(ctx, app, false)
 
-	return result
+	return result, retried
 }
 
 func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
