@@ -95,8 +95,8 @@ services:
     command: >
       server start-dev --ip 0.0.0.0 --search-attribute ApplicationStatus=Keyword
       --search-attribute CurrentStep=Keyword --search-attribute HasOffer=Bool
-      --search-attribute AwaitingExternalSignal=Bool --ui-codec-endpoint
-      http://localhost:8080
+      --search-attribute AwaitingExternalSignal=Bool --search-attribute
+      WithinSLA=Bool --ui-codec-endpoint http://localhost:8080
     depends_on:
       # Not really a dependency of Temporal, but ensures everything starts up together
       codec-server:

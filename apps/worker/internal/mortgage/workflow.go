@@ -34,11 +34,21 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		Timeline:      []TimelineEntry{},
 	}
 
-	// The query handler returns a snapshot with an independent copy of the timeline
-	// so callers cannot observe future mutations to the workflow's slice.
+	// The query handler returns a snapshot with an independent copy of the
+	// timeline so callers cannot observe future mutations to the workflow's
+	// slice. While the workflow is waiting on an async dependency
+	// (PendingDependency is set) SLABreached is computed live against the
+	// current deadline so callers see a fresh status without the workflow
+	// needing to be unblocked. Once the wait resolves PendingDependency is
+	// cleared and SLAStatus / SLABreached are read from the durable values
+	// persisted by the wait function.
 	if err = workflow.SetQueryHandler(ctx, QueryApplication, func() (MortgageApplication, error) {
 		snapshot := app
 		snapshot.Timeline = append([]TimelineEntry(nil), app.Timeline...)
+		if snapshot.PendingDependency != nil && snapshot.SLADeadline != nil {
+			breached := workflow.Now(ctx).After(*snapshot.SLADeadline)
+			snapshot.SLABreached = &breached
+		}
 		return snapshot, nil
 	}); err != nil {
 		return
@@ -197,8 +207,31 @@ func requestAndWaitCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplic
 // CreditCheckCompleted signal or the RetryCreditCheckSignal arrives. Returns the
 // credit result and retried=false on a normal result, or zero value and retried=true
 // when the operator requests a retry. AwaitingExternalSignal is set while blocked.
+//
+// Pending dependency, pending-since and SLA deadline are recorded on entry and
+// cleared on exit so the query handler exposes accurate SLA visibility while
+// the workflow is waiting on an external signal, and stale transient data is
+// not surfaced once the wait resolves.
+//
+// On a successful credit completion the durable SLA outcome (SLAStatus and
+// SLABreached) is captured before the transient deadline is cleared, and the
+// WithinSLA search attribute is updated. Operator retries reset SLA tracking
+// for the next attempt: only the final attempt's outcome is persisted.
 func waitForCreditResultOrRetry(ctx workflow.Context, app *MortgageApplication) (CreditCheckCompleted, bool) {
 	app.CurrentStep = "awaiting_credit_result"
+
+	pendingDep := PendingCreditCheck
+	pendingSince := workflow.Now(ctx)
+	slaDeadline := pendingSince.Add(CreditCheckSLA)
+	app.PendingDependency = &pendingDep
+	app.PendingSince = &pendingSince
+	app.SLADeadline = &slaDeadline
+	// Reset any SLA outcome persisted by a previous attempt so the query
+	// handler's live computation is the source of truth during this wait.
+	// Only the final attempt's outcome is retained.
+	app.SLAStatus = nil
+	app.SLABreached = nil
+
 	recordTimeline(app, ctx, "credit_check", TimelineWaiting, "Awaiting credit bureau result")
 	upsertSearchAttributes(ctx, app, true)
 
@@ -217,6 +250,27 @@ func waitForCreditResultOrRetry(ctx workflow.Context, app *MortgageApplication) 
 			retried = true
 		}).
 		Select(ctx)
+
+	if retried {
+		// Operator retry: drop the in-flight deadline so the next iteration's
+		// fresh deadline is the only one in scope. The persistent outcome
+		// fields were already nil while this wait was running.
+		app.SLADeadline = nil
+	} else {
+		// Capture the final SLA outcome durably. SLADeadline is intentionally
+		// retained so the UI and audit trail can continue to show against
+		// which deadline the wait was evaluated.
+		breached := workflow.Now(ctx).After(slaDeadline)
+		status := SLAStatusWithin
+		if breached {
+			status = SLAStatusBreached
+		}
+		app.SLAStatus = &status
+		app.SLABreached = &breached
+	}
+
+	app.PendingDependency = nil
+	app.PendingSince = nil
 
 	upsertSearchAttributes(ctx, app, false)
 
@@ -355,17 +409,22 @@ func recordTimeline(app *MortgageApplication, ctx workflow.Context, step string,
 	app.UpdatedAt = workflow.Now(ctx)
 }
 
-// upsertSearchAttributes syncs the four custom search attributes to current workflow
+// upsertSearchAttributes syncs the custom search attributes to current workflow
 // state. awaitingSignal must be passed explicitly as it is not stored on
-// MortgageApplication. Failures are logged as warnings; they do not abort the workflow.
+// MortgageApplication. WithinSLA is only included once the workflow has
+// finalised an SLA outcome; before that the attribute is left unset.
+// Failures are logged as warnings; they do not abort the workflow.
 func upsertSearchAttributes(ctx workflow.Context, app *MortgageApplication, awaitingSignal bool) {
-	if err := workflow.UpsertTypedSearchAttributes(
-		ctx,
+	updates := []temporal.SearchAttributeUpdate{
 		saApplicationStatus.ValueSet(string(app.Status)),
 		saCurrentStep.ValueSet(app.CurrentStep),
 		saHasOffer.ValueSet(app.OfferID != ""),
 		saAwaitingExternalSignal.ValueSet(awaitingSignal),
-	); err != nil {
+	}
+	if app.SLABreached != nil {
+		updates = append(updates, saWithinSLA.ValueSet(!*app.SLABreached))
+	}
+	if err := workflow.UpsertTypedSearchAttributes(ctx, updates...); err != nil {
 		workflow.GetLogger(ctx).Warn("failed to upsert search attributes", "error", err)
 	}
 }
