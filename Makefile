@@ -2,6 +2,10 @@ APPS = ./apps
 PACKAGES = ./packages
 PROTO = ./proto
 
+TEMPORAL_ADDRESS ?= temporal:7233
+WORKER_DEPLOYMENT_NAME ?= mortgage-worker
+DEPLOYMENT_VERSION ?= mortgage-worker-v2
+
 copy-proto:
 	@for dir in $(shell ls ${APPS}); do \
 		cp -rf ${PROTO} ${APPS}/$$dir || true; \
@@ -16,11 +20,17 @@ else
 endif
 .PHONY: cruft-update
 
-dev:
-	@$(MAKE) install generate-grpc
+deploy:
+	@$(MAKE) install
 
-	@docker compose up --watch
-.PHONY: dev
+	@docker compose up
+.PHONY: deploy
+
+deploy-v2:
+	@$(MAKE) install
+
+	@docker compose --profile v2 up
+.PHONY: deploy-v2
 
 destroy:
 	@docker compose down
@@ -51,3 +61,19 @@ install-js-deps:
 	@echo "Installing ${PWD}"
 	@npm ci
 .PHONY: install-js-deps
+
+# set-worker-version runs the worker-version helper container with
+# BOOTSTRAP_ONLY=0, so it actively promotes or rolls back to the requested
+# DEPLOYMENT_VERSION. The Temporal server container is not touched.
+#
+# Examples:
+#   make set-worker-version                                          # promote v2 (default)
+#   DEPLOYMENT_VERSION=mortgage-worker-v1 make set-worker-version    # roll back to v1
+set-worker-version:
+	@docker compose run --rm \
+		-e BOOTSTRAP_ONLY=0 \
+		-e TEMPORAL_ADDRESS=$(TEMPORAL_ADDRESS) \
+		-e WORKER_DEPLOYMENT_NAME=$(WORKER_DEPLOYMENT_NAME) \
+		-e DEPLOYMENT_VERSION=$(DEPLOYMENT_VERSION) \
+		worker-version
+.PHONY: set-worker-version

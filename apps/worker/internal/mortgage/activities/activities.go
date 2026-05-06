@@ -61,6 +61,39 @@ func (Activities) RequestCreditCheck(ctx context.Context, input CreditCheckInput
 	}, nil
 }
 
+// PropertyValuation simulates an external property valuation step.
+// It is only invoked by the v2 mortgage workflow profile, between credit
+// approval and offer reservation. The valuation ID is derived deterministically
+// from the application ID, making this activity idempotent under retry.
+func (Activities) PropertyValuation(ctx context.Context, input PropertyValuationInput) (PropertyValuationResult, error) {
+	logger := activity.GetLogger(ctx)
+	d := randomActivityDelay()
+	logger.Info("simulating activity delay", "activity", "PropertyValuation", "delay", d)
+	time.Sleep(d)
+
+	if err := maybeFailExternalDependency("PropertyValuation", input.ExternalFailureRatePercent); err != nil {
+		logger.Warn("simulating external dependency failure", "activity", "PropertyValuation", "failureRatePercent", input.ExternalFailureRatePercent)
+		return PropertyValuationResult{}, err
+	}
+
+	if input.ApplicationID == "" {
+		return PropertyValuationResult{}, fmt.Errorf("property valuation failed: applicationId is required")
+	}
+
+	valuationID := "VAL-" + input.ApplicationID
+
+	logger.Info("property valuation completed",
+		"applicationId", input.ApplicationID,
+		"valuationId", valuationID,
+	)
+
+	return PropertyValuationResult{
+		ApplicationID: input.ApplicationID,
+		ValuationID:   valuationID,
+		ValuedAt:      time.Now(),
+	}, nil
+}
+
 // ReserveOffer allocates a mortgage offer for an approved application.
 // The offer ID is derived deterministically from the application ID, making
 // this activity idempotent: repeated calls for the same application always

@@ -31,6 +31,23 @@ type CreditCheckOutput struct {
 	CompletedAt   time.Time `json:"completedAt"`
 }
 
+// PropertyValuationInput carries the data required to value the property
+// associated with an application. It is invoked only by the v2 mortgage
+// workflow profile, between credit approval and offer reservation.
+type PropertyValuationInput struct {
+	ApplicationID              string `json:"applicationId"`
+	ExternalFailureRatePercent int    `json:"externalFailureRatePercent,omitempty"`
+}
+
+// PropertyValuationResult is returned by PropertyValuation. The valuation ID
+// is derived deterministically from the application ID so repeated invocations
+// are idempotent.
+type PropertyValuationResult struct {
+	ApplicationID string    `json:"applicationId"`
+	ValuationID   string    `json:"valuationId"`
+	ValuedAt      time.Time `json:"valuedAt"`
+}
+
 type ReserveOfferInput struct {
 	ApplicationID              string `json:"applicationId"`
 	ExternalFailureRatePercent int    `json:"externalFailureRatePercent,omitempty"`

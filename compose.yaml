@@ -43,7 +43,7 @@ services:
     depends_on:
       api:
         condition: service_healthy
-      worker:
+      worker_v1:
         condition: service_healthy
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://localhost:9999 || exit 1" ]
@@ -51,17 +51,20 @@ services:
       timeout: 10s
       retries: 3
 
-  worker:
+  worker_v1: &worker
     build:
       context: .
       dockerfile: ./apps/golang.Dockerfile
       target: dev
       args:
         APP: worker
-    environment:
+    environment: &worker-envvars
       KEYS_PATH: /go/root/keys.yaml
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TEMPORAL_ADDRESS: temporal:7233
+      WORKER_PROFILE: v1
+      WORKER_DEPLOYMENT_NAME: mortgage-worker
+      WORKER_BUILD_ID: mortgage-worker-v1
     volumes:
       - ./apps/worker:/go/root/apps/worker
       - ./keys.yaml:/go/root/keys.yaml
@@ -73,6 +76,38 @@ services:
       interval: 10s
       timeout: 10s
       retries: 3
+
+  worker_v2:
+    <<: *worker
+    profiles:
+      - v2
+    environment:
+      <<: *worker-envvars
+      WORKER_PROFILE: v2
+      WORKER_BUILD_ID: mortgage-worker-v2
+
+  worker-version:
+    image: temporalio/temporal
+    restart: "no"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      WORKER_DEPLOYMENT_NAME: mortgage-worker
+      DEPLOYMENT_VERSION: mortgage-worker-v1
+      VERSIONING_INIT_RETRIES: 30
+      VERSIONING_INIT_SLEEP_SECONDS: 2
+      BOOTSTRAP_ONLY: 1
+    volumes:
+      - ./dev/set-worker-version.sh:/scripts/set-worker-version.sh:ro
+    depends_on:
+      temporal:
+        condition: service_healthy
+      worker_v1:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        exec /scripts/set-worker-version.sh
 
   # Example codec server, to decrypt payloads in the Temporal Web UI
   codec-server:

@@ -206,6 +206,52 @@ func TestMaybeFailExternalDependency(t *testing.T) {
 	})
 }
 
+func TestPropertyValuation(t *testing.T) {
+	t.Run("returns a deterministic valuation id", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		val, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
+			ApplicationID: "APP-001",
+		})
+
+		assert.NoError(t, err)
+		var result PropertyValuationResult
+		assert.NoError(t, val.Get(&result))
+		assert.Equal(t, "APP-001", result.ApplicationID)
+		assert.Equal(t, "VAL-APP-001", result.ValuationID)
+		assert.False(t, result.ValuedAt.IsZero())
+	})
+
+	t.Run("rejects empty application id", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		_, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "applicationId")
+	})
+
+	// Property valuation participates in the same failure-injection pattern as
+	// the other external activities. With randIntn forced to 0 the maximum
+	// failure rate guarantees a retryable simulated failure so Temporal drives
+	// the retries automatically.
+	t.Run("respects external failure injection with a retryable error", func(t *testing.T) {
+		orig := randIntn
+		randIntn = func(_ int) int { return 0 }
+		defer func() { randIntn = orig }()
+
+		env := newTestEnv(t)
+
+		_, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
+			ApplicationID:              "APP-001",
+			ExternalFailureRatePercent: MaxExternalFailureRatePercent,
+		})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "PropertyValuation")
+	})
+}
+
 func TestSendNotification(t *testing.T) {
 	t.Run("dispatches notification with application id and status", func(t *testing.T) {
 		env := newTestEnv(t)
