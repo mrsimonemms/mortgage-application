@@ -9,21 +9,52 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// MortgageApplicationWorkflow orchestrates the full mortgage application.
+// WorkflowTypeName is the name under which the mortgage workflow is registered
+// with the worker. Both v1 and v2 worker profiles register their respective
+// implementations under this single name. Worker Deployment Versioning is
+// responsible for routing executions to the worker that started them (v1) or
+// to the current Worker Deployment Version for new executions (v2 once
+// promoted). Patch-style versioning (workflow.GetVersion) is intentionally not
+// used in this PoC.
+const WorkflowTypeName = "MortgageApplicationWorkflow"
+
+// MortgageApplicationWorkflow is the v1 mortgage workflow. It runs the
+// original flow without a property valuation step. v1 worker profiles register
+// this implementation under WorkflowTypeName so executions started before the
+// v2 deployment was promoted continue to run on v1 workers safely.
+func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplicationSubmitted) (MortgageApplication, error) {
+	return runMortgageApplication(ctx, event, false)
+}
+
+// MortgageApplicationWorkflowV2 is the v2 mortgage workflow. It is identical
+// to v1 except that a Property Valuation step runs after a successful credit
+// check and before offer reservation. v2 worker profiles register this
+// implementation under WorkflowTypeName so new executions started after v2 is
+// promoted as the current Worker Deployment Version run the v2 flow.
+func MortgageApplicationWorkflowV2(ctx workflow.Context, event MortgageApplicationSubmitted) (MortgageApplication, error) {
+	return runMortgageApplication(ctx, event, true)
+}
+
+// runMortgageApplication is the shared workflow body used by both v1 and v2
+// worker profiles. The propertyValuationEnabled flag is supplied at registration
+// time via the entrypoint (MortgageApplicationWorkflow or
+// MortgageApplicationWorkflowV2) so workflow code never reads non-deterministic
+// configuration at runtime.
 //
-// Steps:
+// Steps (v1 and v2):
 //  1. Intake — record receipt of the application
 //  2. Credit check request — dispatch to external bureau (activity)
 //  3. Durable wait — block until CreditCheckCompleted signal arrives (signal)
-//  4. Offer reservation — allocate a mortgage offer
-//  5. Complete application — mark the application as completed
+//  4. Property valuation — only when propertyValuationEnabled is true (v2)
+//  5. Offer reservation — allocate a mortgage offer
+//  6. Complete application — mark the application as completed
 //
 // Saga pattern: a compensation function is registered immediately after the offer
 // reservation succeeds. If any later step fails and the workflow returns an error,
 // the deferred compensator releases the reserved offer from a disconnected context
 // and updates the audit trail. The workflow still returns the original error so the
 // business failure is correctly reflected in Temporal.
-func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplicationSubmitted) (app MortgageApplication, err error) {
+func runMortgageApplication(ctx workflow.Context, event MortgageApplicationSubmitted, propertyValuationEnabled bool) (app MortgageApplication, err error) {
 	app = MortgageApplication{
 		ApplicationID: event.ApplicationID,
 		ApplicantName: event.ApplicantName,
@@ -113,6 +144,12 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		meta["reference"] = creditResult.Reference
 	}
 	recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check approved", meta)
+
+	if propertyValuationEnabled {
+		if err = runPropertyValuation(ctx, actCtx, &app, acts, failureRate); err != nil {
+			return
+		}
+	}
 
 	if err = runOfferReservation(ctx, actCtx, &app, acts, failureRate); err != nil {
 		return
@@ -282,6 +319,42 @@ func waitForCreditResultOrRetry(ctx workflow.Context, app *MortgageApplication) 
 	upsertSearchAttributes(ctx, app, false)
 
 	return result, retried
+}
+
+// runPropertyValuation executes the property valuation step. It is invoked only
+// by the v2 workflow profile, after a successful credit and AML check and
+// before offer reservation. The activity uses the same retry/failure semantics
+// as other external dependencies in the workflow: Temporal drives retries for
+// retryable errors, and a final failure surfaces as a property_valuation/failed
+// audit entry before the workflow returns the error. No offer has been
+// reserved at this point so no compensation is required.
+func runPropertyValuation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) error {
+	app.CurrentStep = "property_valuation"
+	upsertSearchAttributes(ctx, app, false)
+	recordTimeline(app, ctx, "property_valuation", TimelineStarted,
+		"Property valuation started",
+		map[string]string{"applicationId": app.ApplicationID})
+
+	var result activities.PropertyValuationResult
+	if err := workflow.ExecuteActivity(actCtx, acts.PropertyValuation, activities.PropertyValuationInput{
+		ApplicationID:              app.ApplicationID,
+		ExternalFailureRatePercent: failureRate,
+	}).Get(ctx, &result); err != nil {
+		recordTimeline(app, ctx, "property_valuation", TimelineFailed,
+			"Property valuation failed",
+			map[string]string{"applicationId": app.ApplicationID})
+		return err
+	}
+
+	recordTimeline(app, ctx, "property_valuation", TimelineCompleted,
+		"Property valuation completed",
+		map[string]string{
+			"applicationId": app.ApplicationID,
+			"valuationId":   result.ValuationID,
+		})
+	upsertSearchAttributes(ctx, app, false)
+
+	return nil
 }
 
 func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) error {

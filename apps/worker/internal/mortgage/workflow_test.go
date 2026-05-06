@@ -719,6 +719,245 @@ func TestMortgageApplicationWorkflow_NotificationApprovedPayload(t *testing.T) {
 	assert.Equal(t, string(NotificationApproved), captured.Status)
 }
 
+// TestMortgageApplicationWorkflowV2_HappyPath verifies that the v2 workflow
+// runs the full happy path including the new property valuation step and
+// that the audit trail reflects the correct sequence: credit_check/completed
+// is followed by property_valuation/started and property_valuation/completed
+// before offer_reservation/started.
+func TestMortgageApplicationWorkflowV2_HappyPath(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var result MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&result))
+
+	assert.Equal(t, StatusCompleted, result.Status)
+	assert.NotEmpty(t, result.OfferID)
+
+	steps := make([]string, len(result.Timeline))
+	for i, e := range result.Timeline {
+		steps[i] = e.Step + "/" + string(e.Status)
+	}
+
+	assert.Equal(t, []string{
+		"submitted/completed",
+		"intake/started",
+		"intake/completed",
+		"credit_check/started",
+		"credit_check/waiting",
+		"credit_check/completed",
+		"property_valuation/started",
+		"property_valuation/completed",
+		"offer_reservation/started",
+		"offer_reservation/completed",
+		"fulfilment/started",
+		"fulfilment/completed",
+		"notification/started",
+		"notification/completed",
+	}, steps)
+
+	// Confirm the property valuation completed entry carries the deterministic
+	// valuation ID metadata.
+	for _, e := range result.Timeline {
+		if e.Step == "property_valuation" && e.Status == TimelineCompleted {
+			assert.Equal(t, "VAL-"+testApplicationID, e.Metadata["valuationId"])
+		}
+	}
+}
+
+// TestMortgageApplicationWorkflow_V1HasNoPropertyValuation confirms the v1
+// workflow does not include the property valuation step. This guards against
+// the v2 step accidentally leaking into the v1 implementation.
+func TestMortgageApplicationWorkflow_V1HasNoPropertyValuation(t *testing.T) {
+	result := runHappyPath(t)
+
+	for _, e := range result.Timeline {
+		assert.NotEqual(t, "property_valuation", e.Step,
+			"v1 workflow must not run the property valuation step")
+	}
+}
+
+// TestMortgageApplicationWorkflowV2_PropertyValuationFailureCompensates verifies
+// that when property valuation fails permanently the workflow surfaces the
+// failure in the audit trail with property_valuation/failed and returns the
+// error. No offer has been reserved at that point, so no compensation is
+// triggered: this is a hard stop, not a saga rollback.
+func TestMortgageApplicationWorkflowV2_PropertyValuationFailureCompensates(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
+	env.RegisterActivity(&activities.Activities{})
+
+	env.OnActivity(activities.Activities{}.PropertyValuation, mock.Anything, mock.Anything).
+		Return(activities.PropertyValuationResult{}, temporal.NewNonRetryableApplicationError(
+			"simulated permanent property valuation failure",
+			"PropertyValuationFailure",
+			nil,
+		))
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.Error(t, env.GetWorkflowError(),
+		"workflow must surface the property valuation failure")
+
+	val, queryErr := env.QueryWorkflow(QueryApplication)
+	assert.NoError(t, queryErr)
+
+	var result MortgageApplication
+	assert.NoError(t, val.Get(&result))
+
+	var sawFailed, sawOfferReservation, sawCompensation bool
+	for _, e := range result.Timeline {
+		if e.Step == "property_valuation" && e.Status == TimelineFailed {
+			sawFailed = true
+		}
+		if e.Step == "offer_reservation" {
+			sawOfferReservation = true
+		}
+		if e.Step == "compensation" {
+			sawCompensation = true
+		}
+	}
+	assert.True(t, sawFailed, "audit trail must include property_valuation/failed")
+	assert.False(t, sawOfferReservation,
+		"offer reservation must not run when property valuation has failed")
+	assert.False(t, sawCompensation,
+		"no compensation runs when no offer has been reserved")
+	assert.Empty(t, result.OfferID, "no offer must be reserved")
+}
+
+// TestMortgageApplicationWorkflowV2_NotificationOnApproved confirms the v2
+// flow still dispatches the applicant notification on the approved terminal
+// outcome. This guards against the property valuation insertion accidentally
+// changing the notification semantics.
+func TestMortgageApplicationWorkflowV2_NotificationOnApproved(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
+	env.RegisterActivity(&activities.Activities{})
+
+	var captured activities.SendNotificationInput
+	env.OnActivity(activities.Activities{}.SendNotification, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(activities.SendNotificationInput)
+		}).
+		Return(activities.SendNotificationResult{
+			ApplicationID: testApplicationID,
+			Status:        string(NotificationApproved),
+			DeliveredAt:   time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
+		}, nil)
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, testApplicationID, captured.ApplicationID)
+	assert.Equal(t, string(NotificationApproved), captured.Status)
+}
+
+// TestMortgageApplicationWorkflowV2_CompensationStillReleasesOffer confirms
+// that the saga compensation path still releases the offer when fulfilment
+// fails after offer reservation, even with the property valuation step in
+// place. The audit trail must show fulfilment/failed and compensation/* in
+// the same way as v1, demonstrating that the new v2 step does not alter
+// downstream compensation semantics.
+func TestMortgageApplicationWorkflowV2_CompensationStillReleasesOffer(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		Scenario:      ScenarioFailAndCompensate,
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.Error(t, env.GetWorkflowError())
+
+	val, queryErr := env.QueryWorkflow(QueryApplication)
+	assert.NoError(t, queryErr)
+
+	var result MortgageApplication
+	assert.NoError(t, val.Get(&result))
+
+	assert.Equal(t, StatusCompensated, result.Status)
+	assert.Empty(t, result.OfferID)
+
+	byKey := make(map[string]TimelineEntry, len(result.Timeline))
+	for _, e := range result.Timeline {
+		byKey[e.Step+"/"+string(e.Status)] = e
+	}
+	_, hasValuation := byKey["property_valuation/completed"]
+	assert.True(t, hasValuation, "property valuation must complete before fulfilment")
+	_, hasFulfilmentFailed := byKey["fulfilment/failed"]
+	assert.True(t, hasFulfilmentFailed)
+	_, hasCompCompleted := byKey["compensation/completed"]
+	assert.True(t, hasCompCompleted)
+}
+
 // TestMortgageApplicationWorkflow_NotificationFailureDoesNotCompensate
 // confirms the resilience contract for the final notification step: even when
 // the activity fails with a non-retryable error, the workflow must still
