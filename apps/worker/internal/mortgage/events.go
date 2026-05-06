@@ -35,6 +35,16 @@ type MortgageApplicationSubmitted struct {
 	ExternalFailureRatePercent int              `json:"externalFailureRatePercent,omitempty"`
 }
 
+// NotificationStatus is the terminal outcome conveyed to the applicant by the
+// final notification activity. Compensated saga outcomes do not produce a
+// notification and so have no NotificationStatus value.
+type NotificationStatus string
+
+const (
+	NotificationApproved NotificationStatus = "approved"
+	NotificationRejected NotificationStatus = "rejected"
+)
+
 type CreditCheckResult string
 
 const (

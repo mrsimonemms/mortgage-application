@@ -104,6 +104,7 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		}
 		recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check rejected", meta)
 		upsertSearchAttributes(ctx, &app, false)
+		runSendNotification(ctx, &app, acts, NotificationRejected, failureRate)
 		return // err is nil; deferred comp is a no-op
 	}
 
@@ -140,6 +141,12 @@ func MortgageApplicationWorkflow(ctx workflow.Context, event MortgageApplication
 		upsertSearchAttributes(ctx, &app, false)
 		return // deferred compensator handles the release-offer step
 	}
+
+	// Approved terminal outcome: notify the applicant. Notification failures
+	// are logged and recorded in the audit trail but never propagated, so a
+	// downstream notification problem cannot retroactively trigger
+	// compensation of an already-fulfilled mortgage.
+	runSendNotification(ctx, &app, acts, NotificationApproved, failureRate)
 
 	return
 }
@@ -391,6 +398,61 @@ func compensateReleaseOffer(ctx workflow.Context, app *MortgageApplication, acts
 	upsertSearchAttributes(ctx, app, false)
 
 	return nil
+}
+
+// runSendNotification dispatches the final applicant notification through the
+// SendNotification activity. It is invoked at terminal business outcomes
+// (approved or rejected) but never on the saga compensation path so that
+// rolled-back applications produce no applicant-facing message.
+//
+// Temporal drives a small retry policy on the activity to absorb transient
+// failures from the simulated external dependency. If retries are exhausted
+// the workflow records a notification/failed audit entry and continues
+// without propagating the error, so a notification dispatch problem cannot
+// retroactively trigger compensation of an otherwise successful workflow.
+func runSendNotification(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, status NotificationStatus, failureRate int) {
+	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    time.Second,
+			BackoffCoefficient: 2.0,
+			MaximumInterval:    10 * time.Second,
+			MaximumAttempts:    3,
+		},
+	})
+
+	recordTimeline(app, ctx, "notification", TimelineStarted,
+		"Notifying applicant of final outcome",
+		map[string]string{
+			"applicationId": app.ApplicationID,
+			"status":        string(status),
+		})
+
+	var result activities.SendNotificationResult
+	if err := workflow.ExecuteActivity(actCtx, acts.SendNotification, activities.SendNotificationInput{
+		ApplicationID:              app.ApplicationID,
+		Status:                     string(status),
+		ExternalFailureRatePercent: failureRate,
+	}).Get(ctx, &result); err != nil {
+		workflow.GetLogger(ctx).Warn("notification dispatch failed; continuing without propagating",
+			"applicationId", app.ApplicationID,
+			"status", string(status),
+			"error", err)
+		recordTimeline(app, ctx, "notification", TimelineFailed,
+			"Notification dispatch failed after retries; outcome unaffected",
+			map[string]string{
+				"applicationId": app.ApplicationID,
+				"status":        string(status),
+			})
+		return
+	}
+
+	recordTimeline(app, ctx, "notification", TimelineCompleted,
+		"Notification dispatched to applicant",
+		map[string]string{
+			"applicationId": app.ApplicationID,
+			"status":        string(status),
+		})
 }
 
 // recordTimeline appends an audit entry to the application timeline and advances

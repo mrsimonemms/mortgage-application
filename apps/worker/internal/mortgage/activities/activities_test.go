@@ -206,6 +206,86 @@ func TestMaybeFailExternalDependency(t *testing.T) {
 	})
 }
 
+func TestSendNotification(t *testing.T) {
+	t.Run("dispatches notification with application id and status", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		val, err := env.ExecuteActivity(Activities{}.SendNotification, SendNotificationInput{
+			ApplicationID: "APP-001",
+			Status:        "approved",
+		})
+
+		assert.NoError(t, err)
+		var result SendNotificationResult
+		assert.NoError(t, val.Get(&result))
+		assert.Equal(t, "APP-001", result.ApplicationID)
+		assert.Equal(t, "approved", result.Status)
+		assert.False(t, result.DeliveredAt.IsZero())
+	})
+
+	t.Run("rejects empty application id with non-retryable error", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		_, err := env.ExecuteActivity(Activities{}.SendNotification, SendNotificationInput{
+			Status: "approved",
+		})
+
+		assert.Error(t, err)
+		var appErr *temporal.ApplicationError
+		errors.As(err, &appErr)
+		if assert.NotNil(t, appErr, "error must be a temporal.ApplicationError") {
+			assert.True(t, appErr.NonRetryable(),
+				"missing applicationId is a wiring bug, not a transient failure")
+		}
+		assert.Contains(t, err.Error(), "applicationId")
+	})
+
+	t.Run("rejects empty status with non-retryable error", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		_, err := env.ExecuteActivity(Activities{}.SendNotification, SendNotificationInput{
+			ApplicationID: "APP-001",
+		})
+
+		assert.Error(t, err)
+		var appErr *temporal.ApplicationError
+		errors.As(err, &appErr)
+		if assert.NotNil(t, appErr) {
+			assert.True(t, appErr.NonRetryable())
+		}
+		assert.Contains(t, err.Error(), "status")
+	})
+
+	// SendNotification participates in the same failure-injection pattern as
+	// the other external activities. With randIntn forced to always return 0
+	// the maximum failure rate guarantees a retryable simulated failure.
+	t.Run("respects external failure injection with a retryable error", func(t *testing.T) {
+		orig := randIntn
+		randIntn = func(_ int) int { return 0 }
+		defer func() { randIntn = orig }()
+
+		env := newTestEnv(t)
+
+		_, err := env.ExecuteActivity(Activities{}.SendNotification, SendNotificationInput{
+			ApplicationID:              "APP-001",
+			Status:                     "approved",
+			ExternalFailureRatePercent: MaxExternalFailureRatePercent,
+		})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "SendNotification")
+
+		// The injected error must be retryable so Temporal drives the backoff
+		// automatically, matching the behaviour of every other activity.
+		var appErr *temporal.ApplicationError
+		errors.As(err, &appErr)
+		if assert.NotNil(t, appErr) {
+			assert.False(t, appErr.NonRetryable(),
+				"external failure injection must produce a retryable error")
+		}
+	})
+}
+
 func TestReleaseOffer(t *testing.T) {
 	t.Run("releases an offer successfully", func(t *testing.T) {
 		env := newTestEnv(t)
