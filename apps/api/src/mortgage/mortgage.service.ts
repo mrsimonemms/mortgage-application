@@ -7,10 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Client, WorkflowNotFoundError } from '@temporalio/client';
-import type {
-  WorkflowExecutionInfo,
-  WorkflowExecutionStatusName,
-} from '@temporalio/client/lib/types';
+import type { WorkflowExecutionInfo } from '@temporalio/client/lib/types';
 import * as proto from '@temporalio/proto';
 import { randomUUID } from 'node:crypto';
 
@@ -18,6 +15,10 @@ import { WORKFLOW_CLIENT } from '../temporal/temporal.providers';
 import { ApplicationActionDto } from './dto/application-action.dto';
 import { ApplicationListItemDto } from './dto/application-list-item.dto';
 import { CreditCheckResult } from './events/credit-check.event';
+import {
+  ApplicationWorkflowStatus,
+  normaliseWorkflowStatus,
+} from './models/application-workflow-status.type';
 import { MortgageApplication } from './models/mortgage-application.model';
 import { MortgageScenario } from './models/mortgage-scenario.type';
 
@@ -67,7 +68,18 @@ export class MortgageService {
       this.workflowId(applicationId),
     );
     try {
-      return await handle.query<MortgageApplication>(QUERY_GET_APPLICATION);
+      // Run describe and query in parallel. workflowStatus lets the UI
+      // distinguish a running workflow from one that has been terminated,
+      // cancelled or otherwise stopped externally — important so the SLA
+      // display can stop ticking when the workflow is no longer running.
+      const [desc, app] = await Promise.all([
+        handle.describe(),
+        handle.query<MortgageApplication>(QUERY_GET_APPLICATION),
+      ]);
+      return {
+        ...app,
+        workflowStatus: normaliseWorkflowStatus(desc.status.code),
+      };
     } catch (err) {
       if (err instanceof WorkflowNotFoundError) {
         throw new NotFoundException(`Application ${applicationId} not found`);
@@ -268,7 +280,11 @@ export class MortgageService {
   private async resolveListItem(
     info: WorkflowExecutionInfo,
   ): Promise<ApplicationListItemDto> {
-    const workflowStatus = info.status.name;
+    // Normalise once at the Temporal boundary so the rest of this method
+    // (and everything downstream of it) only deals with the application-level
+    // status. Reading `status.code` (the proto enum value) avoids any
+    // dependency on the SDK's spelling of the equivalent name.
+    const workflowStatus = normaliseWorkflowStatus(info.status.code);
     const memo = this.readMemo(info.memo);
 
     if (memo.applicantName !== undefined) {
@@ -278,7 +294,7 @@ export class MortgageService {
     // Legacy workflows without memo — fall back to query or result
     const handle = this.client.workflow.getHandle(info.workflowId);
 
-    if (info.status.name === 'RUNNING') {
+    if (workflowStatus === 'running') {
       const app = await handle.query<MortgageApplication>(
         QUERY_GET_APPLICATION,
       );
@@ -288,7 +304,7 @@ export class MortgageService {
       });
     }
 
-    if (info.status.name === 'COMPLETED') {
+    if (workflowStatus === 'completed') {
       const app = (await handle.result()) as MortgageApplication;
       return this.toApplicationListItem(info.workflowId, workflowStatus, {
         applicationId: app.applicationId,
@@ -330,7 +346,7 @@ export class MortgageService {
 
   private toApplicationListItem(
     workflowId: string,
-    workflowStatus: WorkflowExecutionStatusName,
+    workflowStatus: ApplicationWorkflowStatus,
     data: { applicationId?: string; applicantName?: string; scenario?: string },
   ): ApplicationListItemDto {
     return {

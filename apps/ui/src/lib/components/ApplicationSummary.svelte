@@ -1,6 +1,11 @@
 <script lang="ts">
   import type { MortgageApplication } from '$lib/types';
-  import { formatTime, statusLabel } from '$lib/utils';
+  import {
+    formatTime,
+    isNonRunningTerminal,
+    lifecycleLabel,
+    statusLabel,
+  } from '$lib/utils';
 
   let {
     app,
@@ -20,10 +25,27 @@
 
   let now = $state(Date.now());
 
+  // Workflows in TERMINATED, CANCELLED, TIMED_OUT or FAILED have stopped
+  // running without giving the workflow a chance to clear transient SLA
+  // fields, so a query response can still carry pendingDependency /
+  // slaDeadline from the moment of the stop. Treat all such lifecycle
+  // states as "stopped": no live SLA timer, no progress bar, and a neutral
+  // per-status badge that does not imply a business outcome.
+  //
+  // Live SLA logic only fires when the workflow is RUNNING and a
+  // dependency is pending. COMPLETED is handled by the existing
+  // post-completion path (persisted slaStatus/slaBreached). Undefined
+  // workflowStatus (older payloads or pre-fetch state) is treated as
+  // running so behaviour is unchanged.
+  const stoppedStatus = $derived(
+    isNonRunningTerminal(app.workflowStatus) ? app.workflowStatus : undefined,
+  );
+
   // Tick once a second so the elapsed-waiting label updates between API
-  // refreshes. Only runs while a dependency is pending and not terminal.
+  // refreshes. Only runs while a dependency is pending, the business state
+  // is non-terminal, and the workflow is still actually running.
   $effect(() => {
-    if (isTerminal || !app.pendingSince) return;
+    if (isTerminal || stoppedStatus !== undefined || !app.pendingSince) return;
     const id = setInterval(() => (now = Date.now()), 1000);
     return () => clearInterval(id);
   });
@@ -32,7 +54,11 @@
   // live client-side computation against the deadline. Once the wait resolves
   // the workflow persists slaStatus / slaBreached and the row switches to
   // showing the durable outcome without a progress bar or ticking timer.
-  const isWaiting = $derived(!!app.pendingDependency);
+  // A stopped workflow is never considered "waiting" even if its last query
+  // snapshot still carries a pendingDependency.
+  const isWaiting = $derived(
+    !!app.pendingDependency && stoppedStatus === undefined,
+  );
 
   const pendingSinceMs = $derived(
     app.pendingSince ? new Date(app.pendingSince).getTime() : 0,
@@ -73,14 +99,33 @@
   // deadline has not yet been reached. Only meaningful while waiting; once
   // finalised the outcome is binary (met or breached).
   const slaWarning = $derived(isWaiting && !slaBreached && slaProgress > 0.5);
+  // Stopped takes precedence over breach/warn/ok so a non-running terminal
+  // workflow never displays a live business-outcome badge. Lifecycle states
+  // are presented as their own distinct badge value.
   const slaState = $derived(
-    slaBreached ? 'breached' : slaWarning ? 'warn' : 'ok',
+    stoppedStatus !== undefined
+      ? 'stopped'
+      : slaBreached
+        ? 'breached'
+        : slaWarning
+          ? 'warn'
+          : 'ok',
   );
   const slaBadgeLabel = $derived(
-    slaBreached ? 'SLA breached' : slaWarning ? 'SLA at risk' : 'Within SLA',
+    stoppedStatus !== undefined
+      ? lifecycleLabel(stoppedStatus)
+      : slaBreached
+        ? 'SLA breached'
+        : slaWarning
+          ? 'SLA at risk'
+          : 'Within SLA',
   );
+  // Show the SLA row whenever there is a deadline to display (in flight or
+  // persisted), or when the workflow has been stopped while waiting on a
+  // dependency that had an SLA recorded.
   const showSlaRow = $derived(
-    !!app.slaDeadline && (isWaiting || !!app.slaStatus),
+    !!app.slaDeadline &&
+      (isWaiting || !!app.slaStatus || stoppedStatus !== undefined),
   );
   const dependencyLabel = $derived(
     app.pendingDependency ? humanise(app.pendingDependency) : '',
@@ -148,6 +193,7 @@
           class:sla-ok={slaState === 'ok'}
           class:sla-warn={slaState === 'warn'}
           class:sla-breached={slaState === 'breached'}
+          class:sla-stopped={slaState === 'stopped'}
         >
           {slaBadgeLabel}
         </span>
@@ -306,6 +352,15 @@
     background: #fef2f2;
     color: #b91c1c;
     border-color: #fecaca;
+  }
+
+  /* Neutral grey for externally stopped workflows. Distinct from the
+     business-outcome SLA states so terminated executions are not mistaken
+     for a met or breached SLA. */
+  .sla-stopped {
+    background: #f3f4f6;
+    color: #4b5563;
+    border-color: #d1d5db;
   }
 
   .sla-progress {

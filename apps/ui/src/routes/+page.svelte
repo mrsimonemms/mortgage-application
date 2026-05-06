@@ -8,9 +8,11 @@
   import AuditTimeline from '$lib/components/AuditTimeline.svelte';
   import type {
     ApplicationListItem,
+    ApplicationWorkflowStatus,
     MortgageApplication,
     ScenarioOption,
   } from '$lib/types';
+  import { workflowStatusLabel } from '$lib/utils';
   import { untrack } from 'svelte';
 
   import type { PageData } from './$types';
@@ -42,20 +44,18 @@
     untrack(() => data.applications),
   );
 
-  function workflowStatusStyle(status: string): string {
-    const map: Record<string, string> = {
-      RUNNING: 'background:#dbeafe;color:#1e40af;border-color:#93c5fd',
-      COMPLETED: 'background:#f0fdf4;color:#15803d;border-color:#bbf7d0',
-      FAILED: 'background:#fef2f2;color:#b91c1c;border-color:#fecaca',
-      CANCELLED: 'background:#f3f4f6;color:#374151;border-color:#d1d5db',
-      TERMINATED: 'background:#fce7f3;color:#9d174d;border-color:#f9a8d4',
-      TIMED_OUT: 'background:#fffbeb;color:#92400e;border-color:#fde68a',
-      CONTINUED_AS_NEW: 'background:#dbeafe;color:#1e40af;border-color:#93c5fd',
-      PAUSED: 'background:#fffbeb;color:#92400e;border-color:#fde68a',
+  function workflowStatusStyle(status: ApplicationWorkflowStatus): string {
+    const map: Record<ApplicationWorkflowStatus, string> = {
+      running: 'background:#dbeafe;color:#1e40af;border-color:#93c5fd',
+      completed: 'background:#f0fdf4;color:#15803d;border-color:#bbf7d0',
+      failed: 'background:#fef2f2;color:#b91c1c;border-color:#fecaca',
+      cancelled: 'background:#f3f4f6;color:#374151;border-color:#d1d5db',
+      terminated: 'background:#fce7f3;color:#9d174d;border-color:#f9a8d4',
+      timed_out: 'background:#fffbeb;color:#92400e;border-color:#fde68a',
+      continued_as_new: 'background:#dbeafe;color:#1e40af;border-color:#93c5fd',
+      unknown: 'background:#f3f4f6;color:#374151;border-color:#d1d5db',
     };
-    return (
-      map[status] ?? 'background:#f3f4f6;color:#374151;border-color:#d1d5db'
-    );
+    return map[status];
   }
 
   const defaultName = 'Patrick Clifton';
@@ -93,6 +93,18 @@
   const showFailureSlider = $derived(allowsFailureInjection(startScenario));
   const isCreditCheckPending = $derived(app?.status === 'credit_check_pending');
   const isTerminal = $derived(app ? TERMINAL.has(app.status) : false);
+  // Polling tracks the workflow's lifecycle state, NOT the business state.
+  // The two diverge: the workflow can have business `status === 'completed'`
+  // for several seconds while it is still running its tail activities (e.g.
+  // SendNotification, with its random delay and retry policy). Stopping
+  // polling on business completion would freeze the UI before the final
+  // workflowStatus and audit entries arrive. Polling therefore continues
+  // while `workflowStatus === 'running'` and only stops once a non-running
+  // status has been observed and rendered. Undefined is treated as running
+  // so an in-flight initial load never permanently freezes the UI.
+  const isWorkflowRunning = $derived(
+    !app?.workflowStatus || app.workflowStatus === 'running',
+  );
 
   // Reset failure rate when switching away from happy_path so the slider
   // always starts at 0 when the user returns to happy_path.
@@ -113,7 +125,7 @@
 
   // ── Polling via $effect ──────────────────────────────────────────────────
   $effect(() => {
-    if (!app || isTerminal) return;
+    if (!app || !isWorkflowRunning) return;
     const timer = setInterval(() => void doRefresh(), refreshTimeout);
     return () => clearInterval(timer);
   });
@@ -323,7 +335,7 @@
                   class="badge"
                   style={workflowStatusStyle(item.workflowStatus)}
                 >
-                  {item.workflowStatus}
+                  {workflowStatusLabel(item.workflowStatus)}
                 </span>
                 {#if item.scenario}
                   <span class="app-item-scenario">{item.scenario}</span>
