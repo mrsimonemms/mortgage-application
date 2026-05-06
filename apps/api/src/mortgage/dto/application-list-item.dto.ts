@@ -1,18 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import type { WorkflowExecutionStatusName } from '@temporalio/client/lib/types';
 
-const WORKFLOW_EXECUTION_STATUS_VALUES: WorkflowExecutionStatusName[] = [
-  'UNSPECIFIED',
-  'RUNNING',
-  'COMPLETED',
-  'FAILED',
-  'CANCELLED',
-  'TERMINATED',
-  'CONTINUED_AS_NEW',
-  'TIMED_OUT',
-  'PAUSED',
-  'UNKNOWN',
-];
+import { APPLICATION_WORKFLOW_STATUSES } from '../models/application-workflow-status.type';
+import type { ApplicationWorkflowStatus } from '../models/application-workflow-status.type';
 
 export class ApplicationListItemDto {
   @ApiProperty({ description: 'Unique identifier for the application' })
@@ -25,9 +14,10 @@ export class ApplicationListItemDto {
   scenario?: string;
 
   @ApiProperty({
-    description: 'Temporal workflow execution status',
-    enum: WORKFLOW_EXECUTION_STATUS_VALUES,
-    example: 'RUNNING',
+    description:
+      'Application-level workflow lifecycle status, normalised from the underlying Temporal execution status',
+    enum: APPLICATION_WORKFLOW_STATUSES,
+    example: 'running',
   })
-  workflowStatus: WorkflowExecutionStatusName;
+  workflowStatus: ApplicationWorkflowStatus;
 }

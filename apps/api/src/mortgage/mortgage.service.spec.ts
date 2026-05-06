@@ -3,10 +3,15 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { WorkflowNotFoundError } from '@temporalio/client';
 
 import { WORKFLOW_CLIENT } from '../temporal/temporal.providers';
+import { WorkflowExecutionStatus } from './models/application-workflow-status.type';
 import { MortgageService } from './mortgage.service';
 
-// 1 = WORKFLOW_EXECUTION_STATUS_RUNNING (temporal.api.enums.v1.WorkflowExecutionStatus)
-const STATUS_RUNNING = { status: { code: 1 } };
+// Tests pass the actual Temporal proto enum values to the mocked describe()
+// so the normaliser is exercised the same way it is in production. No raw
+// status strings appear in this file.
+const STATUS_RUNNING = {
+  status: { code: WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_RUNNING },
+};
 
 describe('MortgageService', () => {
   let service: MortgageService;
@@ -151,7 +156,7 @@ describe('MortgageService', () => {
   });
 
   describe('getApplication', () => {
-    it('returns application state for a running workflow', async () => {
+    it('returns application state merged with the running workflow status', async () => {
       const mockApp = { applicationId: 'app-123', status: 'submitted' };
       mockHandle.query.mockResolvedValue(mockApp);
 
@@ -161,16 +166,93 @@ describe('MortgageService', () => {
         'mortgage-application-app-123',
       );
       expect(mockHandle.query).toHaveBeenCalledWith('getApplication');
-      expect(result).toEqual(mockApp);
+      // The API normalises Temporal's proto enum value to the canonical
+      // application-level status before returning, so callers never see
+      // Temporal-specific constants or naming variants.
+      expect(result).toEqual({ ...mockApp, workflowStatus: 'running' });
     });
 
-    it('returns application state for a completed workflow', async () => {
+    it('returns application state merged with the completed workflow status', async () => {
       const mockApp = { applicationId: 'app-123', status: 'completed' };
       mockHandle.query.mockResolvedValue(mockApp);
+      mockHandle.describe.mockResolvedValue({
+        status: {
+          code: WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_COMPLETED,
+        },
+      });
 
       const result = await service.getApplication('app-123');
 
-      expect(result).toEqual(mockApp);
+      expect(result).toEqual({ ...mockApp, workflowStatus: 'completed' });
+    });
+
+    // Each Temporal proto enum value must normalise to the exact
+    // application-level status the UI expects. Tests pass the enum value
+    // itself (the same numeric code Temporal returns on `desc.status.code`)
+    // rather than relying on the SDK's string name, so the normaliser is
+    // exercised against the same input shape it sees in production.
+    it.each([
+      {
+        code: WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_TERMINATED,
+        expected: 'terminated',
+      },
+      {
+        // Temporal's proto enum is the American spelling. The mapping
+        // intentionally produces the British `cancelled` for consistency
+        // with the rest of the application's vocabulary.
+        code: WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_CANCELED,
+        expected: 'cancelled',
+      },
+      {
+        code: WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_TIMED_OUT,
+        expected: 'timed_out',
+      },
+      {
+        code: WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_FAILED,
+        expected: 'failed',
+      },
+      {
+        code: WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW,
+        expected: 'continued_as_new',
+      },
+    ])(
+      'normalises Temporal status code=$code to application-level status $expected',
+      async ({ code, expected }) => {
+        const mockApp = {
+          applicationId: 'app-123',
+          status: 'credit_check_pending',
+          pendingDependency: 'credit_check',
+        };
+        mockHandle.query.mockResolvedValue(mockApp);
+        mockHandle.describe.mockResolvedValue({ status: { code } });
+
+        const result = await service.getApplication('app-123');
+
+        expect(result.workflowStatus).toBe(expected);
+        // Mid-flight query data is preserved verbatim; only the lifecycle
+        // hint is added on top so the UI can suppress live SLA visuals.
+        expect(result).toMatchObject(mockApp);
+      },
+    );
+
+    // Statuses we do not explicitly map (the `_UNSPECIFIED` / `_PAUSED`
+    // proto values, undefined, and any future Temporal additions) collapse
+    // to the single `unknown` bucket so the UI never has to handle a value
+    // it does not recognise. The 999 case simulates a future Temporal enum
+    // value that this codebase has not yet been updated to handle.
+    it.each([
+      { code: WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED },
+      { code: WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_PAUSED },
+      { code: 999 },
+      { code: undefined },
+    ])('normalises Temporal status code=$code to unknown', async ({ code }) => {
+      const mockApp = { applicationId: 'app-123', status: 'submitted' };
+      mockHandle.query.mockResolvedValue(mockApp);
+      mockHandle.describe.mockResolvedValue({ status: { code } });
+
+      const result = await service.getApplication('app-123');
+
+      expect(result.workflowStatus).toBe('unknown');
     });
 
     it('throws NotFoundException when the workflow does not exist', async () => {

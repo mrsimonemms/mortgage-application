@@ -19,6 +19,19 @@ export interface TimelineEntry {
 
 export type SlaStatus = 'within_sla' | 'sla_breached';
 
+// Application-level workflow lifecycle status. The API normalises Temporal's
+// raw status names into this enum at the system boundary; the UI never sees
+// or compares against Temporal-specific strings.
+export type ApplicationWorkflowStatus =
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'terminated'
+  | 'timed_out'
+  | 'continued_as_new'
+  | 'unknown';
+
 export interface MortgageApplication {
   applicationId: string;
   applicantName: string;
@@ -33,6 +46,7 @@ export interface MortgageApplication {
   slaDeadline?: string;
   slaStatus?: SlaStatus;
   slaBreached?: boolean;
+  workflowStatus?: ApplicationWorkflowStatus;
 }
 
 export interface ScenarioOption {
@@ -40,21 +54,9 @@ export interface ScenarioOption {
   description: string;
 }
 
-export type WorkflowExecutionStatusName =
-  | 'UNSPECIFIED'
-  | 'RUNNING'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'CANCELLED'
-  | 'TERMINATED'
-  | 'CONTINUED_AS_NEW'
-  | 'TIMED_OUT'
-  | 'PAUSED'
-  | 'UNKNOWN';
-
 export interface ApplicationListItem {
   applicationId: string;
   applicantName: string;
   scenario?: string;
-  workflowStatus: WorkflowExecutionStatusName;
+  workflowStatus: ApplicationWorkflowStatus;
 }
