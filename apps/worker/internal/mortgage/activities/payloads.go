@@ -67,3 +67,20 @@ type ReleaseOfferResult struct {
 	ApplicationID string    `json:"applicationId"`
 	ReleasedAt    time.Time `json:"releasedAt"`
 }
+
+// SendNotificationInput carries the data required to dispatch the final
+// applicant notification. ApplicationID identifies the recipient; Status is
+// the terminal outcome of the workflow ("approved" or "rejected").
+// Compensated outcomes do not produce a notification so are not represented
+// here.
+type SendNotificationInput struct {
+	ApplicationID              string `json:"applicationId"`
+	Status                     string `json:"status"`
+	ExternalFailureRatePercent int    `json:"externalFailureRatePercent,omitempty"`
+}
+
+type SendNotificationResult struct {
+	ApplicationID string    `json:"applicationId"`
+	Status        string    `json:"status"`
+	DeliveredAt   time.Time `json:"deliveredAt"`
+}

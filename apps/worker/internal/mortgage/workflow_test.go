@@ -6,6 +6,8 @@ import (
 
 	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/mortgage/activities"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -75,6 +77,8 @@ func TestMortgageApplicationWorkflow_HappyPath(t *testing.T) {
 		"offer_reservation/completed",
 		"fulfilment/started",
 		"fulfilment/completed",
+		"notification/started",
+		"notification/completed",
 	}, steps)
 }
 
@@ -158,6 +162,22 @@ func TestMortgageApplicationWorkflow_AuditTrail(t *testing.T) {
 			metadata: map[string]string{
 				"offerId": "OFFER-" + testApplicationID,
 				"status":  "completed",
+			},
+		},
+		{
+			key:     "notification/started",
+			details: "Notifying applicant of final outcome",
+			metadata: map[string]string{
+				"applicationId": testApplicationID,
+				"status":        string(NotificationApproved),
+			},
+		},
+		{
+			key:     "notification/completed",
+			details: "Notification dispatched to applicant",
+			metadata: map[string]string{
+				"applicationId": testApplicationID,
+				"status":        string(NotificationApproved),
 			},
 		},
 	}
@@ -292,6 +312,14 @@ func TestMortgageApplicationWorkflow_RejectedCreditCheck(t *testing.T) {
 	assert.Equal(t, "Credit check rejected", rejection.Details)
 	assert.Equal(t, "rejected", rejection.Metadata["result"])
 	assert.Equal(t, "REF-REJECTED", rejection.Metadata["reference"])
+
+	// Rejection is a normal terminal outcome and must produce a notification
+	// addressed to the application with status "rejected".
+	notification, ok := byKey["notification/completed"]
+	if assert.True(t, ok, "rejected applications must still produce a notification") {
+		assert.Equal(t, testApplicationID, notification.Metadata["applicationId"])
+		assert.Equal(t, string(NotificationRejected), notification.Metadata["status"])
+	}
 }
 
 // TestMortgageApplicationWorkflow_RetryAndSucceed verifies the fail_after_offer_reservation
@@ -428,6 +456,14 @@ func TestMortgageApplicationWorkflow_Compensation(t *testing.T) {
 	assert.True(t, ok, "audit trail must include compensation/completed")
 	assert.Equal(t, "OFFER-"+testApplicationID, compCompleted.Metadata["offerId"])
 	assert.Equal(t, string(StatusCompensated), compCompleted.Metadata["status"])
+
+	// A compensated saga outcome must NOT trigger the final applicant
+	// notification. The applicant should not be told their mortgage was
+	// approved when the saga has rolled the offer back.
+	for _, e := range result.Timeline {
+		assert.NotEqual(t, "notification", e.Step,
+			"compensated workflows must not produce any notification audit entry")
+	}
 }
 
 // TestMortgageApplicationWorkflow_RetryCreditCheck verifies that when an operator
@@ -636,4 +672,111 @@ func TestMortgageApplicationWorkflow_SLARetryResetsTracking(t *testing.T) {
 	if assert.NotNil(t, final.SLABreached) {
 		assert.False(t, *final.SLABreached)
 	}
+}
+
+// TestMortgageApplicationWorkflow_NotificationApprovedPayload verifies that
+// the SendNotification activity is invoked with the applicationId and the
+// "approved" status when the workflow reaches the normal successful terminal
+// outcome.
+func TestMortgageApplicationWorkflow_NotificationApprovedPayload(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	var captured activities.SendNotificationInput
+	env.OnActivity(activities.Activities{}.SendNotification, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(activities.SendNotificationInput)
+		}).
+		Return(activities.SendNotificationResult{
+			ApplicationID: testApplicationID,
+			Status:        string(NotificationApproved),
+			DeliveredAt:   time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
+		}, nil)
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	assert.Equal(t, testApplicationID, captured.ApplicationID,
+		"notification must address the applicationId")
+	assert.Equal(t, string(NotificationApproved), captured.Status)
+}
+
+// TestMortgageApplicationWorkflow_NotificationFailureDoesNotCompensate
+// confirms the resilience contract for the final notification step: even when
+// the activity fails with a non-retryable error, the workflow must still
+// complete successfully (StatusCompleted, OfferID retained) and must NOT
+// trigger the saga compensator. A failed notification is a soft failure
+// recorded in the audit trail; it does not roll back a fulfilled mortgage.
+func TestMortgageApplicationWorkflow_NotificationFailureDoesNotCompensate(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	env.OnActivity(activities.Activities{}.SendNotification, mock.Anything, mock.Anything).
+		Return(activities.SendNotificationResult{}, temporal.NewNonRetryableApplicationError(
+			"simulated permanent notification failure",
+			"NotificationFailure",
+			nil,
+		))
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError(),
+		"a notification failure must not cause the workflow itself to fail")
+
+	var result MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&result))
+
+	assert.Equal(t, StatusCompleted, result.Status,
+		"workflow must remain in completed state; notification failure is non-fatal")
+	assert.NotEmpty(t, result.OfferID,
+		"offer must remain reserved; notification failure must not trigger compensation")
+
+	// The audit trail must record the notification failure so operators can
+	// see what happened, while no compensation entries should appear.
+	var sawNotificationFailed, sawCompensation bool
+	for _, e := range result.Timeline {
+		if e.Step == "notification" && e.Status == TimelineFailed {
+			sawNotificationFailed = true
+		}
+		if e.Step == "compensation" {
+			sawCompensation = true
+		}
+	}
+	assert.True(t, sawNotificationFailed, "audit trail must include notification/failed")
+	assert.False(t, sawCompensation, "compensation must NOT run for a notification failure")
 }

@@ -115,6 +115,54 @@ func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (Re
 	}, nil
 }
 
+// SendNotification simulates dispatching the final applicant notification
+// (e.g. an email, push or letter) once the workflow reaches a terminal
+// business outcome. It is intentionally a small simulation: the activity
+// honours the same random delay and failure injection patterns as the other
+// demo activities so it can be observed in the Temporal UI alongside them.
+//
+// The activity validates that an applicationId and status are present. Both
+// are required to produce a meaningful notification; an empty value indicates
+// a wiring bug rather than a transient external failure, so the resulting
+// error is non-retryable.
+func (Activities) SendNotification(ctx context.Context, input SendNotificationInput) (SendNotificationResult, error) {
+	logger := activity.GetLogger(ctx)
+	d := randomActivityDelay()
+	logger.Info("simulating activity delay", "activity", "SendNotification", "delay", d)
+	time.Sleep(d)
+
+	if err := maybeFailExternalDependency("SendNotification", input.ExternalFailureRatePercent); err != nil {
+		logger.Warn("simulating external dependency failure", "activity", "SendNotification", "failureRatePercent", input.ExternalFailureRatePercent)
+		return SendNotificationResult{}, err
+	}
+
+	if input.ApplicationID == "" {
+		return SendNotificationResult{}, temporal.NewNonRetryableApplicationError(
+			"send notification failed: applicationId is required",
+			"InvalidNotificationInput",
+			nil,
+		)
+	}
+	if input.Status == "" {
+		return SendNotificationResult{}, temporal.NewNonRetryableApplicationError(
+			"send notification failed: status is required",
+			"InvalidNotificationInput",
+			nil,
+		)
+	}
+
+	logger.Info("notification dispatched to applicant",
+		"applicationId", input.ApplicationID,
+		"status", input.Status,
+	)
+
+	return SendNotificationResult{
+		ApplicationID: input.ApplicationID,
+		Status:        input.Status,
+		DeliveredAt:   time.Now(),
+	}, nil
+}
+
 // CompleteApplication finalises the mortgage once an offer has been reserved.
 //
 // When SimulateFailure is set the activity fails on the first four attempts and
