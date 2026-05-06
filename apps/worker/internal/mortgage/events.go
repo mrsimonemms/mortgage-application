@@ -2,6 +2,14 @@ package mortgage
 
 import "time"
 
+// CreditCheckSLA bounds how long the workflow can wait for the credit bureau
+// signal before the SLA is considered breached. Kept small for demo visibility.
+const CreditCheckSLA = 30 * time.Second
+
+// PendingCreditCheck names the credit check dependency in query responses while
+// the workflow is durably waiting for the credit bureau signal.
+const PendingCreditCheck = "credit_check"
+
 // WorkflowScenario controls which demo path the workflow executes.
 type WorkflowScenario string
 

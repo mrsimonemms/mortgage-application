@@ -177,6 +177,11 @@ func TestMortgageApplicationWorkflow_AuditTrail(t *testing.T) {
 // TestMortgageApplicationWorkflow_QueryWhileWaiting queries the workflow mid-flight
 // while it is blocked on the credit bureau signal. The response must show the
 // awaiting_credit_result step and include a credit_check/waiting timeline entry.
+// While blocked, SLA visibility fields must be populated and SLAStatus must be
+// nil (outcome not yet finalised). After completion, PendingDependency and
+// PendingSince must be cleared, but the durable SLA outcome (SLADeadline,
+// SLAStatus, SLABreached) must remain so the UI can show whether the SLA was
+// met or breached.
 func TestMortgageApplicationWorkflow_QueryWhileWaiting(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
@@ -207,6 +212,16 @@ func TestMortgageApplicationWorkflow_QueryWhileWaiting(t *testing.T) {
 		}
 		assert.True(t, found, "timeline should include credit_check/waiting entry while blocked")
 
+		if assert.NotNil(t, app.PendingDependency, "pendingDependency must be set while waiting") {
+			assert.Equal(t, PendingCreditCheck, *app.PendingDependency)
+		}
+		assert.NotNil(t, app.PendingSince, "pendingSince must be set while waiting")
+		if assert.NotNil(t, app.SLADeadline, "slaDeadline must be set while waiting") {
+			assert.Equal(t, app.PendingSince.Add(CreditCheckSLA), *app.SLADeadline)
+		}
+		assert.NotNil(t, app.SLABreached, "slaBreached must be reported while waiting")
+		assert.Nil(t, app.SLAStatus, "slaStatus must be nil while the SLA outcome is in flight")
+
 		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
 			ApplicationID: testApplicationID,
 			Result:        CreditCheckApproved,
@@ -218,6 +233,18 @@ func TestMortgageApplicationWorkflow_QueryWhileWaiting(t *testing.T) {
 
 	assert.True(t, env.IsWorkflowCompleted())
 	assert.NoError(t, env.GetWorkflowError())
+
+	var final MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&final))
+	assert.Nil(t, final.PendingDependency, "pendingDependency must be cleared after wait resolves")
+	assert.Nil(t, final.PendingSince, "pendingSince must be cleared after wait resolves")
+	assert.NotNil(t, final.SLADeadline, "slaDeadline must persist as part of the durable SLA outcome")
+	if assert.NotNil(t, final.SLAStatus, "slaStatus must record the durable outcome") {
+		assert.Equal(t, SLAStatusWithin, *final.SLAStatus)
+	}
+	if assert.NotNil(t, final.SLABreached, "slaBreached must record the durable outcome") {
+		assert.False(t, *final.SLABreached, "credit check signalled within SLA window")
+	}
 }
 
 // TestMortgageApplicationWorkflow_RejectedCreditCheck confirms the final state and
@@ -509,11 +536,104 @@ func TestSearchAttributeKeys_Names(t *testing.T) {
 		{"CurrentStep", saCurrentStep.GetName()},
 		{"HasOffer", saHasOffer.GetName()},
 		{"AwaitingExternalSignal", saAwaitingExternalSignal.GetName()},
+		{"WithinSLA", saWithinSLA.GetName()},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.name, tc.got)
 		})
+	}
+}
+
+// TestMortgageApplicationWorkflow_SLABreached drives the wait long enough that
+// the credit check signal arrives after the SLA deadline. The final application
+// must report SLAStatus="sla_breached" and SLABreached=true durably, even
+// though the workflow continued through the rest of the happy path.
+func TestMortgageApplicationWorkflow_SLABreached(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	// Deliver the credit signal after the SLA deadline elapses. CreditCheckSLA
+	// is 30s, so a 60s delay guarantees the deadline has passed.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, 60*time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var final MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&final))
+
+	assert.Equal(t, StatusCompleted, final.Status, "workflow still completes after SLA breach")
+	if assert.NotNil(t, final.SLAStatus, "slaStatus must be persisted") {
+		assert.Equal(t, SLAStatusBreached, *final.SLAStatus)
+	}
+	if assert.NotNil(t, final.SLABreached, "slaBreached must be persisted") {
+		assert.True(t, *final.SLABreached, "signal arrived after the deadline")
+	}
+	assert.NotNil(t, final.SLADeadline, "slaDeadline is retained as part of the durable outcome")
+	assert.Nil(t, final.PendingDependency, "pendingDependency must be cleared after wait resolves")
+	assert.Nil(t, final.PendingSince, "pendingSince must be cleared after wait resolves")
+}
+
+// TestMortgageApplicationWorkflow_SLARetryResetsTracking confirms that an
+// operator retry replaces the in-flight SLA tracking and that only the final
+// successful attempt's outcome is persisted.
+func TestMortgageApplicationWorkflow_SLARetryResetsTracking(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	// Trigger a retry well after the first attempt's SLA window has elapsed,
+	// then deliver the credit result quickly inside the new attempt's window.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(RetryCreditCheckSignal, nil)
+	}, 60*time.Second)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 2, 0, 0, time.UTC),
+		})
+	}, 61*time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var final MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&final))
+
+	if assert.NotNil(t, final.SLAStatus, "final attempt must record an SLA outcome") {
+		assert.Equal(t, SLAStatusWithin, *final.SLAStatus,
+			"only the final attempt's outcome is retained; that attempt resolved within its own SLA")
+	}
+	if assert.NotNil(t, final.SLABreached) {
+		assert.False(t, *final.SLABreached)
 	}
 }
