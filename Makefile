@@ -21,8 +21,6 @@ endif
 .PHONY: cruft-update
 
 deploy:
-	@$(MAKE) install
-
 	@docker compose up
 .PHONY: deploy
 

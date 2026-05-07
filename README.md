@@ -152,6 +152,12 @@ sequenceDiagram
 Make is the entry point for the demo. The targets below cover the full v1
 to v2 narrative without exposing Docker Compose directly.
 
+Install the dependencies:
+
+```bash
+make install
+```
+
 Start the system:
 
 ```bash
