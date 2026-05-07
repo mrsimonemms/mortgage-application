@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/observability"
+	"github.com/temporal-sa/mortgage-application-demo/apps/worker/internal/observability"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )

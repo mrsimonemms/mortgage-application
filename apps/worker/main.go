@@ -7,11 +7,11 @@ import (
 
 	gh "github.com/mrsimonemms/golang-helpers"
 	"github.com/mrsimonemms/golang-helpers/temporal"
-	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/mortgage"
-	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/mortgage/activities"
 	"github.com/mrsimonemms/temporal-codec-server/packages/golang/algorithms/aes"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/temporal-sa/mortgage-application-demo/apps/worker/internal/mortgage"
+	"github.com/temporal-sa/mortgage-application-demo/apps/worker/internal/mortgage/activities"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )

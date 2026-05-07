@@ -1,7 +1,7 @@
 package mortgage
 
 import (
-	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/mortgage/activities"
+	"github.com/temporal-sa/mortgage-application-demo/apps/worker/internal/mortgage/activities"
 )
 
 func init() {

@@ -7,7 +7,7 @@
       "project_name": "mortgage-application",
       "description": "A Temporal-powered demo showcasing orchestration of a long-running mortgage application, including async dependencies, operator interaction, failure handling and safe workflow evolution.",
       "author": "Simon Emms <simon@simonemms.com>",
-      "repo": "github.com/mrsimonemms/mortgage-application",
+      "repo": "github.com/temporal-sa/mortgage-application-demo",
       "_template": "https://github.com/mrsimonemms/new",
       "_commit": "575419a2c0d81d09e68c8a42d027c32b138f1b71"
     }
