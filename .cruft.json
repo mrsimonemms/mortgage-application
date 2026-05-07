@@ -5,7 +5,7 @@
   "context": {
     "cookiecutter": {
       "project_name": "mortgage-application",
-      "description": "Mortgage application POC",
+      "description": "A Temporal-powered demo showcasing orchestration of a long-running mortgage application, including async dependencies, operator interaction, failure handling and safe workflow evolution.",
       "author": "Simon Emms <simon@simonemms.com>",
       "repo": "github.com/mrsimonemms/mortgage-application",
       "_template": "https://github.com/mrsimonemms/new",
