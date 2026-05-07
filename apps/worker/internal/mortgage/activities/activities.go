@@ -80,16 +80,29 @@ func (Activities) PropertyValuation(ctx context.Context, input PropertyValuation
 		return PropertyValuationResult{}, fmt.Errorf("property valuation failed: applicationId is required")
 	}
 
+	// A non-positive property value is treated as a wiring bug rather than a
+	// transient external failure: a zero or negative valuation should never
+	// have been signalled into the workflow, so retrying would not help.
+	if input.PropertyValue <= 0 {
+		return PropertyValuationResult{}, temporal.NewNonRetryableApplicationError(
+			"property valuation failed: propertyValue must be positive",
+			"InvalidPropertyValuation",
+			nil,
+		)
+	}
+
 	valuationID := "VAL-" + input.ApplicationID
 
 	logger.Info("property valuation completed",
 		"applicationId", input.ApplicationID,
 		"valuationId", valuationID,
+		"propertyValue", input.PropertyValue,
 	)
 
 	return PropertyValuationResult{
 		ApplicationID: input.ApplicationID,
 		ValuationID:   valuationID,
+		PropertyValue: input.PropertyValue,
 		ValuedAt:      time.Now(),
 	}, nil
 }

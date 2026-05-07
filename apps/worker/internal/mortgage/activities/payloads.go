@@ -34,17 +34,23 @@ type CreditCheckOutput struct {
 // PropertyValuationInput carries the data required to value the property
 // associated with an application. It is invoked only by the v2 mortgage
 // workflow profile, between credit approval and offer reservation.
+// PropertyValue is the operator-submitted value in pounds; the activity
+// rejects non-positive values up front rather than accepting and silently
+// passing through invalid input.
 type PropertyValuationInput struct {
-	ApplicationID              string `json:"applicationId"`
-	ExternalFailureRatePercent int    `json:"externalFailureRatePercent,omitempty"`
+	ApplicationID              string  `json:"applicationId"`
+	PropertyValue              float64 `json:"propertyValue"`
+	ExternalFailureRatePercent int     `json:"externalFailureRatePercent,omitempty"`
 }
 
 // PropertyValuationResult is returned by PropertyValuation. The valuation ID
 // is derived deterministically from the application ID so repeated invocations
-// are idempotent.
+// are idempotent. PropertyValue is echoed back so the audit trail can record
+// the value that was actually used by the activity.
 type PropertyValuationResult struct {
 	ApplicationID string    `json:"applicationId"`
 	ValuationID   string    `json:"valuationId"`
+	PropertyValue float64   `json:"propertyValue"`
 	ValuedAt      time.Time `json:"valuedAt"`
 }
 

@@ -27,13 +27,12 @@ deploy:
 .PHONY: deploy
 
 deploy-v2:
-	@$(MAKE) install
-
-	@docker compose --profile v2 up
+	@docker compose --profile v2 up -d --remove-orphans
 .PHONY: deploy-v2
 
 destroy:
-	@docker compose down
+	@docker compose --profile v2 down --volumes --remove-orphans
+	@docker compose down --remove-orphans
 .PHONY: destroy
 
 generate-db-migrations:

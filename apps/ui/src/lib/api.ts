@@ -89,7 +89,11 @@ export type ApplicationAction =
       payload: { result: 'approved' | 'rejected'; reference?: string };
     }
   | { type: 'retry_credit_check' }
-  | { type: 'rerun_application' };
+  | { type: 'rerun_application' }
+  | {
+      type: 'submit_property_valuation';
+      propertyValuation: { propertyValue: number };
+    };
 
 export async function performAction(
   applicationId: string,

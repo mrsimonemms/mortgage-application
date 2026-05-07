@@ -32,12 +32,22 @@ export type ApplicationWorkflowStatus =
   | 'continued_as_new'
   | 'unknown';
 
+// Workflow version derived from the Worker Build ID by the API. v1 has no
+// Property Valuation step; v2 includes Property Valuation between Credit &
+// AML and Offer Reservation. `unknown` is shown for unversioned workers or
+// future versions the UI does not yet recognise.
+export type WorkflowVersion = 'v1' | 'v2' | 'unknown';
+
 export interface MortgageApplication {
   applicationId: string;
   applicantName: string;
   status: ApplicationStatus;
   currentStep: string;
   offerId?: string;
+  // Operator-supplied property value in pounds. Populated by the v2 workflow
+  // once the property-valuation-submitted signal has been received. v1
+  // applications never populate this field.
+  propertyValue?: number;
   createdAt: string;
   updatedAt: string;
   timeline: TimelineEntry[];
@@ -47,6 +57,8 @@ export interface MortgageApplication {
   slaStatus?: SlaStatus;
   slaBreached?: boolean;
   workflowStatus?: ApplicationWorkflowStatus;
+  workflowVersion?: WorkflowVersion;
+  workerBuildId?: string;
 }
 
 export interface ScenarioOption {
@@ -59,4 +71,6 @@ export interface ApplicationListItem {
   applicantName: string;
   scenario?: string;
   workflowStatus: ApplicationWorkflowStatus;
+  workflowVersion?: WorkflowVersion;
+  workerBuildId?: string;
 }

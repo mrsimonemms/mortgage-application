@@ -1,4 +1,4 @@
-import type { ApplicationWorkflowStatus } from './types';
+import type { ApplicationWorkflowStatus, WorkflowVersion } from './types';
 
 export function formatTime(iso: string): string {
   return new Date(iso).toLocaleString('en-GB', {
@@ -59,4 +59,32 @@ export function workflowStatusLabel(status: ApplicationWorkflowStatus): string {
 
 export function lifecycleLabel(status: NonRunningTerminalStatus): string {
   return WORKFLOW_STATUS_LABELS[status];
+}
+
+// Human-readable label for the workflow version badge. v1/v2 are kept as
+// short, lowercase tokens so the badge reads consistently with the existing
+// CLI/log naming. The unknown bucket is spelled out so the user sees
+// 'Unknown' rather than a placeholder character.
+const WORKFLOW_VERSION_LABELS: Record<WorkflowVersion, string> = {
+  v1: 'v1',
+  v2: 'v2',
+  unknown: 'Unknown',
+};
+
+export function workflowVersionLabel(version: WorkflowVersion): string {
+  return WORKFLOW_VERSION_LABELS[version];
+}
+
+// Subtle CSS for the v1/v2/unknown badge. v2 gets a distinct teal so the
+// updated workflow slice is identifiable at a glance during the demo, while
+// v1 stays a neutral grey to emphasise that legacy executions are unchanged.
+export function workflowVersionStyle(version: WorkflowVersion): string {
+  switch (version) {
+    case 'v2':
+      return 'background:#ecfeff;color:#0e7490;border-color:#a5f3fc';
+    case 'v1':
+      return 'background:#f3f4f6;color:#374151;border-color:#d1d5db';
+    default:
+      return 'background:#f9fafb;color:#9ca3af;border-color:#e5e7eb';
+  }
 }
