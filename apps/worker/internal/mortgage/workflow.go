@@ -350,6 +350,16 @@ func waitForCreditResultOrRetry(ctx workflow.Context, app *MortgageApplication) 
 func runPropertyValuation(ctx, actCtx workflow.Context, app *MortgageApplication, acts *activities.Activities, failureRate int) error {
 	propertyValue := waitForPropertyValuation(ctx, app)
 
+	// Deliberate defect for the "bad deployment" demo scenario. Living in
+	// the v2 workflow path means v1 executions are unaffected; the trigger
+	// is a specific property value so an operator can opt in or out. The
+	// panic surfaces as a workflow task failure, which Temporal will keep
+	// retrying against the current Worker Deployment Version until the
+	// defect is resolved by rolling back to v1 or by deploying a fixed v2.
+	if propertyValue == 350001 {
+		panic("simulated defect in valuation workflow logic")
+	}
+
 	app.CurrentStep = "property_valuation"
 	upsertSearchAttributes(ctx, app, false)
 	recordTimeline(app, ctx, "property_valuation", TimelineStarted,
