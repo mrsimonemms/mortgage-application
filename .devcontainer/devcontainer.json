@@ -23,7 +23,7 @@
     }
   },
   "containerEnv": {
-    "GIT_REPO": "github.com/mrsimonemms/mortgage-application"
+    "GIT_REPO": "github.com/temporal-sa/mortgage-application-demo"
   },
   "forwardPorts": [
     8080,
