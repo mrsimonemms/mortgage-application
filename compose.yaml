@@ -1,4 +1,16 @@
 services:
+  api-deps:
+    build:
+      context: .
+      dockerfile: ./apps/node.Dockerfile
+      target: dev
+      args:
+        APP: api
+    volumes:
+      - .:/home/node/root
+      - api_node_modules:/home/node/root/apps/api/node_modules
+    command: npm ci
+
   api:
     build:
       context: .
@@ -14,9 +26,13 @@ services:
     ports:
       - 9000:9000
     volumes:
-      - ./apps/api:/home/node/root/apps/api
-      - ./keys.yaml:/home/node/root/keys.yaml
+      - .:/home/node/root
+      - api_node_modules:/home/node/root/apps/api/node_modules
+    # working_dir: /home/node/root/apps/api
+    command: npm run start:dev
     depends_on:
+      api-deps:
+        condition: service_completed_successfully
       temporal:
         condition: service_healthy
     healthcheck:
@@ -24,6 +40,18 @@ services:
       interval: 10s
       timeout: 10s
       retries: 3
+
+  ui-deps:
+    build:
+      context: .
+      dockerfile: ./apps/node.Dockerfile
+      target: dev
+      args:
+        APP: ui
+    volumes:
+      - .:/home/node/root
+      - ui_node_modules:/home/node/root/apps/ui/node_modules
+    command: npm ci
 
   ui:
     build:
@@ -39,8 +67,13 @@ services:
     ports:
       - 9999:9999
     volumes:
-      - ./apps/ui:/home/node/root/apps/ui
+      - .:/home/node/root
+      - ui_node_modules:/home/node/root/apps/ui/node_modules
+    # working_dir: /home/node/root/apps/ui
+    command: npm run start:dev
     depends_on:
+      ui-deps:
+        condition: service_completed_successfully
       api:
         condition: service_healthy
       worker_v1:
@@ -148,3 +181,7 @@ services:
       - 9090:9090
     volumes:
       - ./dev/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+volumes:
+  ui_node_modules:
+  api_node_modules:
