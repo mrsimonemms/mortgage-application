@@ -13,6 +13,10 @@ handling and safe workflow evolution.
   * [Service interactions](#service-interactions)
   * [Running the demo](#running-the-demo)
   * [Suggested demo flow](#suggested-demo-flow)
+  * [Observability and metrics](#observability-and-metrics)
+    * [Custom metric labels](#custom-metric-labels)
+    * [Useful Prometheus queries](#useful-prometheus-queries)
+    * [Suggested metrics demo flow](#suggested-metrics-demo-flow)
 
 <!-- Regenerate with "pre-commit run -a markdown-toc" -->
 
@@ -196,3 +200,115 @@ make destroy
 10. Inspect the audit timeline, the SLA indicators and the workflow
     version badge for both applications to confirm the difference is
     durably recorded.
+
+### Observability and metrics
+
+The worker exposes a Prometheus metrics endpoint that covers both the
+standard Temporal SDK metrics and the custom mortgage business metrics
+emitted from activities. Prometheus scrapes the worker metrics endpoint
+over the internal Docker network and treats the v1 and v2 workers as
+separate scrape targets.
+
+Prometheus is available at <http://localhost:9090>. The query UI can be
+accessed directly at <http://localhost:9090/graph>.
+
+When v2 is not deployed, its Prometheus target will appear as down.
+This is expected. When `make deploy-v2` is run, the v2 target becomes
+available automatically.
+
+This is intentionally lightweight. Application logs remain plain
+structured logs and metrics are scoped to the demo. A production
+platform would normally ship logs and metrics to existing tooling such
+as Prometheus, Grafana, Datadog, Splunk or ELK. The demo proves the
+metrics integration path rather than building a full observability
+platform.
+
+#### Custom metric labels
+
+The mortgage business metrics carry these labels:
+
+* `version` is the worker profile (`v1` or `v2`), injected at worker
+  registration time.
+* `scenario` is the demo scenario the application was started with.
+* `outcome` is the terminal outcome (`approved` or `rejected`) and is
+  only set on the completion counter.
+
+#### Useful Prometheus queries
+
+Worker scrape health:
+
+```promql
+up{job="mortgage-worker"}
+```
+
+Shows whether Prometheus can scrape each worker. Run this first so a
+silent metric is not mistaken for a missing event.
+
+Applications started:
+
+```promql
+mortgage_applications_started_total
+```
+
+Increments when the intake activity succeeds.
+
+Applications completed by outcome:
+
+```promql
+mortgage_applications_completed_total
+```
+
+Increments when the notification activity runs for an approved or
+rejected application.
+
+Approved applications:
+
+```promql
+mortgage_applications_completed_total{outcome="approved"}
+```
+
+Shows approved applications.
+
+Compensated applications:
+
+```promql
+mortgage_applications_compensated_total
+```
+
+Increments when the offer release compensation succeeds.
+
+Completions by version and outcome:
+
+```promql
+sum by (version, outcome) (mortgage_applications_completed_total)
+```
+
+Shows completions grouped by worker version and outcome.
+
+Starts by version and scenario:
+
+```promql
+sum by (version, scenario) (mortgage_applications_started_total)
+```
+
+Shows starts grouped by worker version and scenario.
+
+Compensation by version and scenario:
+
+```promql
+sum by (version, scenario) (mortgage_applications_compensated_total)
+```
+
+Shows compensation grouped by worker version and scenario.
+
+#### Suggested metrics demo flow
+
+1. Open Prometheus at <http://localhost:9090/graph>.
+2. Run `up{job="mortgage-worker"}` to confirm scraping.
+3. Start and complete a v1 application.
+4. Deploy and promote v2, then complete a v2 application.
+5. Re-run grouped queries to show metrics split by version.
+6. Trigger a compensation scenario and query
+   `mortgage_applications_compensated_total`.
+7. Observe how metrics differentiate between v1 and v2 executions
+   without any additional instrumentation changes.

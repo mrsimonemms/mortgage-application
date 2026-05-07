@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: mortgage-worker
+    static_configs:
+      - targets:
+          - worker_v1:9090
+          - worker_v2:9090

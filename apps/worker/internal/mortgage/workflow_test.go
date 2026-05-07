@@ -11,6 +11,19 @@ import (
 	"go.temporal.io/sdk/testsuite"
 )
 
+// testActivities is the canonical Activities instance used across workflow
+// tests. It is built through the public constructor so test wiring matches
+// production: an invalid profile here would surface the same way as a
+// misconfigured worker at startup. Tests use it both for env.RegisterActivity
+// and for forming method-value references in env.OnActivity expectations.
+var testActivities = func() *activities.Activities {
+	acts, err := activities.NewActivities("v1")
+	if err != nil {
+		panic(err)
+	}
+	return acts
+}()
+
 // runHappyPath executes the full mortgage workflow through the Temporal test environment
 // and returns the final application state. The credit check signal is delivered with a
 // short delay so the workflow can dispatch its upstream activities first.
@@ -20,7 +33,7 @@ func runHappyPath(t *testing.T) MortgageApplication {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -206,7 +219,7 @@ func TestMortgageApplicationWorkflow_QueryWhileWaiting(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -273,7 +286,7 @@ func TestMortgageApplicationWorkflow_RejectedCreditCheck(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -332,7 +345,7 @@ func TestMortgageApplicationWorkflow_RetryAndSucceed(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -388,7 +401,7 @@ func TestMortgageApplicationWorkflow_Compensation(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -474,7 +487,7 @@ func TestMortgageApplicationWorkflow_RetryCreditCheck(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -525,7 +538,7 @@ func TestMortgageApplicationWorkflow_Rerun(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID:         newAppID,
@@ -590,7 +603,7 @@ func TestMortgageApplicationWorkflow_SLABreached(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -635,7 +648,7 @@ func TestMortgageApplicationWorkflow_SLARetryResetsTracking(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -682,10 +695,10 @@ func TestMortgageApplicationWorkflow_NotificationApprovedPayload(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	var captured activities.SendNotificationInput
-	env.OnActivity(activities.Activities{}.SendNotification, mock.Anything, mock.Anything).
+	env.OnActivity(testActivities.SendNotification, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			captured = args.Get(1).(activities.SendNotificationInput)
 		}).
@@ -749,7 +762,7 @@ func TestMortgageApplicationWorkflowV2_HappyPath(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -819,7 +832,7 @@ func TestMortgageApplicationWorkflowV2_WaitsForPropertyValuationSignal(t *testin
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -877,7 +890,7 @@ func TestMortgageApplicationWorkflowV2_IgnoresNonPositiveValuationSubmission(t *
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -939,9 +952,9 @@ func TestMortgageApplicationWorkflowV2_PropertyValuationFailureCompensates(t *te
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
-	env.OnActivity(activities.Activities{}.PropertyValuation, mock.Anything, mock.Anything).
+	env.OnActivity(testActivities.PropertyValuation, mock.Anything, mock.Anything).
 		Return(activities.PropertyValuationResult{}, temporal.NewNonRetryableApplicationError(
 			"simulated permanent property valuation failure",
 			"PropertyValuationFailure",
@@ -996,10 +1009,10 @@ func TestMortgageApplicationWorkflowV2_NotificationOnApproved(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	var captured activities.SendNotificationInput
-	env.OnActivity(activities.Activities{}.SendNotification, mock.Anything, mock.Anything).
+	env.OnActivity(testActivities.SendNotification, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			captured = args.Get(1).(activities.SendNotificationInput)
 		}).
@@ -1035,7 +1048,7 @@ func TestMortgageApplicationWorkflowV2_CompensationStillReleasesOffer(t *testing
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
 	input := MortgageApplicationSubmitted{
 		ApplicationID: testApplicationID,
@@ -1082,9 +1095,9 @@ func TestMortgageApplicationWorkflow_NotificationFailureDoesNotCompensate(t *tes
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflow)
-	env.RegisterActivity(&activities.Activities{})
+	env.RegisterActivity(testActivities)
 
-	env.OnActivity(activities.Activities{}.SendNotification, mock.Anything, mock.Anything).
+	env.OnActivity(testActivities.SendNotification, mock.Anything, mock.Anything).
 		Return(activities.SendNotificationResult{}, temporal.NewNonRetryableApplicationError(
 			"simulated permanent notification failure",
 			"NotificationFailure",
