@@ -9,6 +9,7 @@ handling and safe workflow evolution.
 * [Overview](#overview)
   * [What it demonstrates](#what-it-demonstrates)
   * [Scenarios](#scenarios)
+  * [Defect in new deployment (v2)](#defect-in-new-deployment-v2)
   * [Why this demo matters](#why-this-demo-matters)
   * [Service interactions](#service-interactions)
   * [Running the demo](#running-the-demo)
@@ -78,6 +79,59 @@ are selected from the start form in the UI.
   `externalFailureRatePercent` slider. It causes eligible activities to
   fail randomly so Temporal retry policies can be observed absorbing
   transient errors without operator intervention.
+
+### Defect in new deployment (v2)
+
+A defect has been introduced in the v2 workflow logic. When a property
+value of `350001` is submitted, the workflow panics during execution.
+
+Temporal retries the workflow task automatically, but the workflow
+cannot make progress and remains in a running state. The trigger is
+deterministic and operator controlled, not random, so it can be opted
+into or skipped during a live demo.
+
+In-flight v1 applications are unaffected. Worker Deployment Versioning
+pins them to the v1 worker that started them, so a bad v2 deployment
+cannot poison work that started before the promotion.
+
+Observable behaviour:
+
+* The workflow does not progress beyond the property valuation step.
+* The application remains in a running state.
+* The audit timeline shows the last successful step.
+* No downstream actions (offer reservation, fulfilment or notification)
+  are executed.
+
+Recovery options:
+
+* Roll back to the previous worker version:
+
+  ```bash
+  DEPLOYMENT_VERSION=mortgage-worker-v1 make set-worker-version
+  ```
+
+* Or deploy a fixed v2 worker and promote it.
+
+After recovery, re-run the workflow using the existing operator action.
+The workflow will resume from the beginning without duplicating side
+effects.
+
+This scenario demonstrates how Temporal isolates the impact of
+defective code. Even though the workflow logic is broken, no partial
+or duplicate side effects occur. The system remains in a consistent
+state and can be safely recovered by fixing or rolling back the
+deployment.
+
+Suggested demo flow:
+
+1. Deploy and promote v2.
+2. Start a new application.
+3. Submit the credit check.
+4. Submit the property valuation as `350001`.
+5. Observe the workflow stalled in a running state with no progress.
+6. Roll back to v1 or deploy a fixed v2.
+7. Re-run the application.
+8. Observe successful completion with no duplicate effects.
 
 ### Why this demo matters
 
