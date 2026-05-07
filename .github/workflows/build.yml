@@ -54,10 +54,10 @@ jobs:
           if [ "${{ startsWith(github.event.ref, 'refs/tags/') }}" = "true"  ];
           then
             # Tag build - use everything
-            apps="$(find apps/ -maxdepth 1 -type d -and -not -name "apps" | jq -Rrc 'split(",")')"
-            pkgs="$(find packages/ -maxdepth 1 -type d -and -not -name "packages" | jq -Rrc 'split(",")')"
+            apps="$(find apps/ -maxdepth 1 -mindepth 1 -type d | jq -Rsc 'split("\n")[:-1]')"
+            pkgs="$(find packages/ -maxdepth 1 -mindepth 1 -type d | jq -Rsc 'split("\n")[:-1]')"
 
-            all="$(jq -rc --argjson apps "${apps}" --argjson pkgs "${pkgs}" -n '$apps + $pkgs')"
+            all="$(jq -rc --argjson apps "$apps" --argjson pkgs "$pkgs" -n '$apps + $pkgs')"
           else
             # Branch build - use filtered
             all='${{ steps.filtered.outputs.all_files }}'
