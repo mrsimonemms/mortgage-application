@@ -161,7 +161,15 @@ func exec() error {
 		}
 	}
 
-	w.RegisterActivity(&activities.Activities{})
+	acts, err := activities.NewActivities(wp.Profile)
+	if err != nil {
+		return gh.FatalError{
+			Cause: err,
+			Msg:   "Unable to construct activities",
+		}
+	}
+
+	w.RegisterActivity(acts)
 
 	// Start the healthcheck server in a separate goroutine
 	temporal.NewHealthCheck(context.Background(), []string{TaskQueue}, "0.0.0.0:9000", c)

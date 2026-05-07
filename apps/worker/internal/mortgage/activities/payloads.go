@@ -5,6 +5,10 @@ import "time"
 type IntakeInput struct {
 	ApplicationID string `json:"applicationId"`
 	ApplicantName string `json:"applicantName"`
+	// Scenario carries the demo scenario through to the activity so the
+	// "applications started" metric can be labelled by scenario without the
+	// workflow having to emit metrics directly. Empty when not supplied.
+	Scenario string `json:"scenario,omitempty"`
 }
 
 type IntakeResult struct {
@@ -81,8 +85,11 @@ type CompleteApplicationResult struct {
 }
 
 type ReleaseOfferInput struct {
-	ApplicationID              string `json:"applicationId"`
-	OfferID                    string `json:"offerId"`
+	ApplicationID string `json:"applicationId"`
+	OfferID       string `json:"offerId"`
+	// Scenario labels the "applications compensated" metric so demo runs can
+	// be split by scenario in Prometheus. Empty when not supplied.
+	Scenario                   string `json:"scenario,omitempty"`
 	ExternalFailureRatePercent int    `json:"externalFailureRatePercent,omitempty"`
 }
 
@@ -97,8 +104,11 @@ type ReleaseOfferResult struct {
 // Compensated outcomes do not produce a notification so are not represented
 // here.
 type SendNotificationInput struct {
-	ApplicationID              string `json:"applicationId"`
-	Status                     string `json:"status"`
+	ApplicationID string `json:"applicationId"`
+	Status        string `json:"status"`
+	// Scenario labels the "applications completed" metric so demo runs can
+	// be split by scenario in Prometheus. Empty when not supplied.
+	Scenario                   string `json:"scenario,omitempty"`
 	ExternalFailureRatePercent int    `json:"externalFailureRatePercent,omitempty"`
 }
 

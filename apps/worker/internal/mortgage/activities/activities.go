@@ -5,16 +5,57 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mrsimonemms/mortgage-application/apps/worker/internal/observability"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
 
 // Activities groups all mortgage application activity implementations.
-// Register it as a single unit: w.RegisterActivity(&Activities{}).
-type Activities struct{}
+// Construct via NewActivities and register the returned pointer as a single
+// unit on the worker. The struct itself carries no behaviour beyond holding
+// the immutable worker profile injected at startup, so callers should never
+// build it via composite literal directly.
+type Activities struct {
+	// workerProfile is the validated worker profile ("v1" or "v2") for the
+	// process this activity registration belongs to. It is set once by
+	// NewActivities and never mutated thereafter, so reading it from any
+	// activity method is safe under Temporal's concurrent execution model.
+	// It is unexported so tests and other packages must go through the
+	// constructor and cannot accidentally produce an Activities with an
+	// invalid profile.
+	workerProfile string
+}
+
+// NewActivities constructs an Activities ready for worker registration.
+// The worker profile is validated up front so a misconfigured worker fails
+// fast at startup rather than silently emitting metrics with a wrong or
+// empty version label. Only "v1" and "v2" are accepted; any other value is
+// rejected with an error the caller is expected to surface as fatal.
+func NewActivities(workerProfile string) (*Activities, error) {
+	if workerProfile != "v1" && workerProfile != "v2" {
+		return nil, fmt.Errorf("invalid worker profile %q", workerProfile)
+	}
+
+	return &Activities{
+		workerProfile: workerProfile,
+	}, nil
+}
+
+// workerVersionLabel returns the version label used for business metrics.
+// Returns "unknown" when the receiver is nil or the profile is empty so an
+// unset profile is visible in Prometheus rather than collapsing into the
+// empty-string label. The nil-safe path keeps method-value references
+// formed from a zero-value pointer (used by some test helpers and by
+// workflow code that only needs a method-name handle) safe to evaluate.
+func (a *Activities) workerVersionLabel() string {
+	if a == nil || a.workerProfile == "" {
+		return "unknown"
+	}
+	return a.workerProfile
+}
 
 // Intake validates and records the receipt of a mortgage application.
-func (Activities) Intake(ctx context.Context, input IntakeInput) (IntakeResult, error) {
+func (a *Activities) Intake(ctx context.Context, input IntakeInput) (IntakeResult, error) {
 	logger := activity.GetLogger(ctx)
 	d := randomActivityDelay()
 	logger.Info("simulating activity delay", "activity", "Intake", "delay", d)
@@ -28,6 +69,14 @@ func (Activities) Intake(ctx context.Context, input IntakeInput) (IntakeResult, 
 		return IntakeResult{}, fmt.Errorf("intake failed: applicantName is required")
 	}
 
+	// Business metric: increment once per successful intake. Intake is the
+	// first authoritative activity for a workflow, runs once per execution
+	// and only after validation has passed, so this is a safe place to count
+	// "applications started" without risking duplicates.
+	observability.ApplicationsStartedTotal.
+		WithLabelValues(input.Scenario, a.workerVersionLabel()).
+		Inc()
+
 	return IntakeResult{
 		ApplicationID: input.ApplicationID,
 		ReceivedAt:    time.Now(),
@@ -37,7 +86,7 @@ func (Activities) Intake(ctx context.Context, input IntakeInput) (IntakeResult, 
 // RequestCreditCheck submits a credit and AML check request to the external bureau.
 // This activity only dispatches the request. The result is delivered asynchronously
 // via the credit-check-completed signal sent through the API.
-func (Activities) RequestCreditCheck(ctx context.Context, input CreditCheckInput) (CreditCheckRequestResult, error) {
+func (a *Activities) RequestCreditCheck(ctx context.Context, input CreditCheckInput) (CreditCheckRequestResult, error) {
 	logger := activity.GetLogger(ctx)
 	d := randomActivityDelay()
 	logger.Info("simulating activity delay", "activity", "RequestCreditCheck", "delay", d)
@@ -65,7 +114,7 @@ func (Activities) RequestCreditCheck(ctx context.Context, input CreditCheckInput
 // It is only invoked by the v2 mortgage workflow profile, between credit
 // approval and offer reservation. The valuation ID is derived deterministically
 // from the application ID, making this activity idempotent under retry.
-func (Activities) PropertyValuation(ctx context.Context, input PropertyValuationInput) (PropertyValuationResult, error) {
+func (a *Activities) PropertyValuation(ctx context.Context, input PropertyValuationInput) (PropertyValuationResult, error) {
 	logger := activity.GetLogger(ctx)
 	d := randomActivityDelay()
 	logger.Info("simulating activity delay", "activity", "PropertyValuation", "delay", d)
@@ -112,7 +161,7 @@ func (Activities) PropertyValuation(ctx context.Context, input PropertyValuation
 // this activity idempotent: repeated calls for the same application always
 // return the same offer. This also makes compensation straightforward: the
 // offer ID is stable and can be passed directly to ReleaseOffer.
-func (Activities) ReserveOffer(ctx context.Context, input ReserveOfferInput) (ReserveOfferResult, error) {
+func (a *Activities) ReserveOffer(ctx context.Context, input ReserveOfferInput) (ReserveOfferResult, error) {
 	logger := activity.GetLogger(ctx)
 	d := randomActivityDelay()
 	logger.Info("simulating activity delay", "activity", "ReserveOffer", "delay", d)
@@ -139,7 +188,7 @@ func (Activities) ReserveOffer(ctx context.Context, input ReserveOfferInput) (Re
 
 // ReleaseOffer cancels an existing offer reservation.
 // This is the compensating action for ReserveOffer.
-func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (ReleaseOfferResult, error) {
+func (a *Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (ReleaseOfferResult, error) {
 	logger := activity.GetLogger(ctx)
 	d := randomActivityDelay()
 	logger.Info("simulating activity delay", "activity", "ReleaseOffer", "delay", d)
@@ -154,6 +203,13 @@ func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (Re
 		"applicationId", input.ApplicationID,
 		"offerId", input.OfferID,
 	)
+
+	// Business metric: increment once per successful compensation. ReleaseOffer
+	// is the workflow's only compensating activity so a successful run here
+	// uniquely corresponds to a compensated application.
+	observability.ApplicationsCompensatedTotal.
+		WithLabelValues(input.Scenario, a.workerVersionLabel()).
+		Inc()
 
 	return ReleaseOfferResult{
 		ApplicationID: input.ApplicationID,
@@ -171,7 +227,7 @@ func (Activities) ReleaseOffer(ctx context.Context, input ReleaseOfferInput) (Re
 // are required to produce a meaningful notification; an empty value indicates
 // a wiring bug rather than a transient external failure, so the resulting
 // error is non-retryable.
-func (Activities) SendNotification(ctx context.Context, input SendNotificationInput) (SendNotificationResult, error) {
+func (a *Activities) SendNotification(ctx context.Context, input SendNotificationInput) (SendNotificationResult, error) {
 	logger := activity.GetLogger(ctx)
 	d := randomActivityDelay()
 	logger.Info("simulating activity delay", "activity", "SendNotification", "delay", d)
@@ -202,6 +258,14 @@ func (Activities) SendNotification(ctx context.Context, input SendNotificationIn
 		"status", input.Status,
 	)
 
+	// Business metric: increment once per terminal applicant notification.
+	// SendNotification runs only at the approved or rejected terminal outcomes
+	// and never on the compensation path, so the Status value is the workflow
+	// outcome label.
+	observability.ApplicationsCompletedTotal.
+		WithLabelValues(input.Scenario, a.workerVersionLabel(), input.Status).
+		Inc()
+
 	return SendNotificationResult{
 		ApplicationID: input.ApplicationID,
 		Status:        input.Status,
@@ -215,7 +279,7 @@ func (Activities) SendNotification(ctx context.Context, input SendNotificationIn
 // succeeds on the fifth, demonstrating Temporal's automatic retry behaviour. Each
 // failure is a retryable ApplicationError so Temporal drives the backoff — no manual
 // retry loop is needed in workflow code.
-func (Activities) CompleteApplication(ctx context.Context, input CompleteApplicationInput) (CompleteApplicationResult, error) {
+func (a *Activities) CompleteApplication(ctx context.Context, input CompleteApplicationInput) (CompleteApplicationResult, error) {
 	logger := activity.GetLogger(ctx)
 	info := activity.GetInfo(ctx)
 	d := randomActivityDelay()

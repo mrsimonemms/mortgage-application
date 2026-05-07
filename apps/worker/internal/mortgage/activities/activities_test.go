@@ -14,19 +14,102 @@ func init() {
 	DisableActivityDelaysForTests()
 }
 
+// newTestActivities is the canonical way for tests to obtain an Activities
+// value. It goes through the public constructor so the test code path
+// matches production wiring: an invalid profile here would surface the same
+// way as a misconfigured worker at startup.
+func newTestActivities(profile string) *Activities {
+	acts, err := NewActivities(profile)
+	if err != nil {
+		panic(err)
+	}
+	return acts
+}
+
+// testActs is a package-level v1 Activities used as a method-value handle
+// in env.ExecuteActivity calls. The actual activity is executed against the
+// instance registered in the test environment, not this one, so the
+// specific profile here only affects metric-label tests that explicitly use
+// a different env.
+var testActs = newTestActivities("v1")
+
 func newTestEnv(t *testing.T) *testsuite.TestActivityEnvironment {
+	t.Helper()
+	// Default test environment registers Activities through the constructor
+	// with the v1 profile so the registered receiver always has a valid
+	// configuration. Tests that need a specific profile label use
+	// newTestEnvWithProfile.
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestActivityEnvironment()
+	env.RegisterActivity(newTestActivities("v1"))
+	return env
+}
+
+// newTestEnvWithProfile registers Activities with an explicit worker profile
+// so tests can verify the labelled metric path without touching process
+// environment state. Profile must be one of the values accepted by
+// NewActivities; passing an invalid value causes the test to fail loudly.
+func newTestEnvWithProfile(t *testing.T, profile string) *testsuite.TestActivityEnvironment {
 	t.Helper()
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestActivityEnvironment()
-	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(newTestActivities(profile))
 	return env
+}
+
+// TestNewActivities pins the validation contract of the constructor: only
+// "v1" and "v2" produce a usable Activities; everything else is rejected so
+// a misconfigured worker fails fast at startup.
+func TestNewActivities(t *testing.T) {
+	t.Run("accepts v1", func(t *testing.T) {
+		acts, err := NewActivities("v1")
+		assert.NoError(t, err)
+		if assert.NotNil(t, acts) {
+			assert.Equal(t, "v1", acts.workerVersionLabel())
+		}
+	})
+
+	t.Run("accepts v2", func(t *testing.T) {
+		acts, err := NewActivities("v2")
+		assert.NoError(t, err)
+		if assert.NotNil(t, acts) {
+			assert.Equal(t, "v2", acts.workerVersionLabel())
+		}
+	})
+
+	t.Run("rejects empty profile", func(t *testing.T) {
+		acts, err := NewActivities("")
+		assert.Error(t, err)
+		assert.Nil(t, acts)
+	})
+
+	t.Run("rejects unknown profile", func(t *testing.T) {
+		acts, err := NewActivities("v3")
+		assert.Error(t, err)
+		assert.Nil(t, acts)
+	})
+}
+
+// TestWorkerVersionLabel pins the documented fallback so a future change to
+// the helper cannot silently start emitting an empty version label. Both
+// the nil-receiver and the empty-profile paths must resolve to "unknown" so
+// method-value handles formed from a zero-value pointer remain safe to
+// evaluate.
+func TestWorkerVersionLabel(t *testing.T) {
+	var nilActs *Activities
+	assert.Equal(t, "unknown", nilActs.workerVersionLabel(),
+		"nil receiver must surface as the explicit \"unknown\" label")
+	assert.Equal(t, "unknown", (&Activities{}).workerVersionLabel(),
+		"empty profile must surface as the explicit \"unknown\" label")
+	assert.Equal(t, "v1", newTestActivities("v1").workerVersionLabel())
+	assert.Equal(t, "v2", newTestActivities("v2").workerVersionLabel())
 }
 
 func TestIntake(t *testing.T) {
 	t.Run("succeeds with valid input", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		val, err := env.ExecuteActivity(Activities{}.Intake, IntakeInput{
+		val, err := env.ExecuteActivity(testActs.Intake, IntakeInput{
 			ApplicationID: "APP-001",
 			ApplicantName: "Jane Smith",
 		})
@@ -38,10 +121,29 @@ func TestIntake(t *testing.T) {
 		assert.False(t, result.ReceivedAt.IsZero())
 	})
 
+	// Metrics emission must never affect activity behaviour. Exercising the
+	// path with both a scenario label and an injected worker profile catches
+	// regressions where labelling starts returning errors or panicking, and
+	// confirms the activity does not depend on process environment state.
+	t.Run("succeeds with scenario and worker profile injected", func(t *testing.T) {
+		env := newTestEnvWithProfile(t, "v1")
+
+		val, err := env.ExecuteActivity(testActs.Intake, IntakeInput{
+			ApplicationID: "APP-001",
+			ApplicantName: "Jane Smith",
+			Scenario:      "happy_path",
+		})
+
+		assert.NoError(t, err)
+		var result IntakeResult
+		assert.NoError(t, val.Get(&result))
+		assert.Equal(t, "APP-001", result.ApplicationID)
+	})
+
 	t.Run("fails when applicationId is empty", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.Intake, IntakeInput{
+		_, err := env.ExecuteActivity(testActs.Intake, IntakeInput{
 			ApplicantName: "Jane Smith",
 		})
 
@@ -52,7 +154,7 @@ func TestIntake(t *testing.T) {
 	t.Run("fails when applicantName is empty", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.Intake, IntakeInput{
+		_, err := env.ExecuteActivity(testActs.Intake, IntakeInput{
 			ApplicationID: "APP-001",
 		})
 
@@ -64,7 +166,7 @@ func TestIntake(t *testing.T) {
 func TestRequestCreditCheck(t *testing.T) {
 	env := newTestEnv(t)
 
-	val, err := env.ExecuteActivity(Activities{}.RequestCreditCheck, CreditCheckInput{
+	val, err := env.ExecuteActivity(testActs.RequestCreditCheck, CreditCheckInput{
 		ApplicationID: "APP-001",
 	})
 
@@ -79,7 +181,7 @@ func TestReserveOffer(t *testing.T) {
 	t.Run("returns a stable offer ID", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		val, err := env.ExecuteActivity(Activities{}.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-001"})
+		val, err := env.ExecuteActivity(testActs.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-001"})
 
 		assert.NoError(t, err)
 		var result ReserveOfferResult
@@ -92,7 +194,7 @@ func TestReserveOffer(t *testing.T) {
 	t.Run("is idempotent: same application returns same offer ID", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		val1, err := env.ExecuteActivity(Activities{}.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-001"})
+		val1, err := env.ExecuteActivity(testActs.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-001"})
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -101,7 +203,7 @@ func TestReserveOffer(t *testing.T) {
 			return
 		}
 
-		val2, err := env.ExecuteActivity(Activities{}.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-001"})
+		val2, err := env.ExecuteActivity(testActs.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-001"})
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -116,7 +218,7 @@ func TestReserveOffer(t *testing.T) {
 	t.Run("returns different offer IDs for different applications", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		val1, err := env.ExecuteActivity(Activities{}.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-001"})
+		val1, err := env.ExecuteActivity(testActs.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-001"})
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -125,7 +227,7 @@ func TestReserveOffer(t *testing.T) {
 			return
 		}
 
-		val2, err := env.ExecuteActivity(Activities{}.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-002"})
+		val2, err := env.ExecuteActivity(testActs.ReserveOffer, ReserveOfferInput{ApplicationID: "APP-002"})
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -142,7 +244,7 @@ func TestCompleteApplication(t *testing.T) {
 	t.Run("succeeds on the happy path", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		val, err := env.ExecuteActivity(Activities{}.CompleteApplication, CompleteApplicationInput{
+		val, err := env.ExecuteActivity(testActs.CompleteApplication, CompleteApplicationInput{
 			ApplicationID: "APP-001",
 			OfferID:       "OFFER-APP-001",
 		})
@@ -157,7 +259,7 @@ func TestCompleteApplication(t *testing.T) {
 	t.Run("fails with a retryable error on early attempts when SimulateFailure is set", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.CompleteApplication, CompleteApplicationInput{
+		_, err := env.ExecuteActivity(testActs.CompleteApplication, CompleteApplicationInput{
 			ApplicationID:   "APP-001",
 			OfferID:         "OFFER-APP-001",
 			SimulateFailure: true,
@@ -210,7 +312,7 @@ func TestPropertyValuation(t *testing.T) {
 	t.Run("returns a deterministic valuation id and echoes the property value", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		val, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
+		val, err := env.ExecuteActivity(testActs.PropertyValuation, PropertyValuationInput{
 			ApplicationID: "APP-001",
 			PropertyValue: 350000,
 		})
@@ -227,7 +329,7 @@ func TestPropertyValuation(t *testing.T) {
 	t.Run("rejects empty application id", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
+		_, err := env.ExecuteActivity(testActs.PropertyValuation, PropertyValuationInput{
 			PropertyValue: 350000,
 		})
 
@@ -241,7 +343,7 @@ func TestPropertyValuation(t *testing.T) {
 	t.Run("rejects non-positive property value with a non-retryable error", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
+		_, err := env.ExecuteActivity(testActs.PropertyValuation, PropertyValuationInput{
 			ApplicationID: "APP-001",
 			PropertyValue: 0,
 		})
@@ -266,7 +368,7 @@ func TestPropertyValuation(t *testing.T) {
 
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
+		_, err := env.ExecuteActivity(testActs.PropertyValuation, PropertyValuationInput{
 			ApplicationID:              "APP-001",
 			PropertyValue:              350000,
 			ExternalFailureRatePercent: MaxExternalFailureRatePercent,
@@ -281,7 +383,7 @@ func TestSendNotification(t *testing.T) {
 	t.Run("dispatches notification with application id and status", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		val, err := env.ExecuteActivity(Activities{}.SendNotification, SendNotificationInput{
+		val, err := env.ExecuteActivity(testActs.SendNotification, SendNotificationInput{
 			ApplicationID: "APP-001",
 			Status:        "approved",
 		})
@@ -294,10 +396,32 @@ func TestSendNotification(t *testing.T) {
 		assert.False(t, result.DeliveredAt.IsZero())
 	})
 
+	// Both terminal outcomes must succeed with metric labelling applied. The
+	// Status field doubles as the "outcome" label on the completion counter,
+	// so a regression there would surface as either a panic or a returned
+	// error from the activity. The injected worker profile confirms the
+	// version label is taken from the registered Activities value rather than
+	// the process environment.
+	t.Run("succeeds for both approved and rejected outcomes", func(t *testing.T) {
+		for _, status := range []string{"approved", "rejected"} {
+			env := newTestEnvWithProfile(t, "v2")
+			val, err := env.ExecuteActivity(testActs.SendNotification, SendNotificationInput{
+				ApplicationID: "APP-001",
+				Status:        status,
+				Scenario:      "happy_path",
+			})
+
+			assert.NoError(t, err)
+			var result SendNotificationResult
+			assert.NoError(t, val.Get(&result))
+			assert.Equal(t, status, result.Status)
+		}
+	})
+
 	t.Run("rejects empty application id with non-retryable error", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.SendNotification, SendNotificationInput{
+		_, err := env.ExecuteActivity(testActs.SendNotification, SendNotificationInput{
 			Status: "approved",
 		})
 
@@ -314,7 +438,7 @@ func TestSendNotification(t *testing.T) {
 	t.Run("rejects empty status with non-retryable error", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.SendNotification, SendNotificationInput{
+		_, err := env.ExecuteActivity(testActs.SendNotification, SendNotificationInput{
 			ApplicationID: "APP-001",
 		})
 
@@ -337,7 +461,7 @@ func TestSendNotification(t *testing.T) {
 
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.SendNotification, SendNotificationInput{
+		_, err := env.ExecuteActivity(testActs.SendNotification, SendNotificationInput{
 			ApplicationID:              "APP-001",
 			Status:                     "approved",
 			ExternalFailureRatePercent: MaxExternalFailureRatePercent,
@@ -361,9 +485,10 @@ func TestReleaseOffer(t *testing.T) {
 	t.Run("releases an offer successfully", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		val, err := env.ExecuteActivity(Activities{}.ReleaseOffer, ReleaseOfferInput{
+		val, err := env.ExecuteActivity(testActs.ReleaseOffer, ReleaseOfferInput{
 			ApplicationID: "APP-001",
 			OfferID:       "OFFER-APP-001",
+			Scenario:      "fail_and_compensate_after_offer_reservation",
 		})
 
 		assert.NoError(t, err)
@@ -379,7 +504,7 @@ func TestReleaseOffer(t *testing.T) {
 	t.Run("is idempotent: repeated calls for the same offerId succeed", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		val1, err := env.ExecuteActivity(Activities{}.ReleaseOffer, ReleaseOfferInput{
+		val1, err := env.ExecuteActivity(testActs.ReleaseOffer, ReleaseOfferInput{
 			ApplicationID: "APP-001",
 			OfferID:       "OFFER-APP-001",
 		})
@@ -388,7 +513,7 @@ func TestReleaseOffer(t *testing.T) {
 		assert.NoError(t, val1.Get(&r1))
 		assert.Equal(t, "APP-001", r1.ApplicationID)
 
-		val2, err := env.ExecuteActivity(Activities{}.ReleaseOffer, ReleaseOfferInput{
+		val2, err := env.ExecuteActivity(testActs.ReleaseOffer, ReleaseOfferInput{
 			ApplicationID: "APP-001",
 			OfferID:       "OFFER-APP-001",
 		})

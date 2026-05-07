@@ -90,7 +90,14 @@ func runMortgageApplication(ctx workflow.Context, event MortgageApplicationSubmi
 		StartToCloseTimeout: 30 * time.Second,
 	})
 
-	acts := activities.Activities{}
+	// acts is used purely as a method-name handle for workflow.ExecuteActivity;
+	// the receiver carries no behaviour during workflow code and is never
+	// invoked through this reference. The actual activity implementation is
+	// constructed via activities.NewActivities and registered with the worker
+	// in main.go, so a zero-value pointer here keeps workflow code free of
+	// profile selection while still satisfying the pointer-receiver method
+	// set required by the underlying activity definitions.
+	acts := &activities.Activities{}
 	failureRate := event.ExternalFailureRatePercent
 
 	// Compensation runs in LIFO order from a disconnected context whenever the
@@ -118,7 +125,7 @@ func runMortgageApplication(ctx workflow.Context, event MortgageApplicationSubmi
 
 	upsertSearchAttributes(ctx, &app, false)
 
-	if err = runIntake(ctx, actCtx, &app, acts); err != nil {
+	if err = runIntake(ctx, actCtx, &app, acts, event.Scenario); err != nil {
 		return
 	}
 
@@ -136,7 +143,7 @@ func runMortgageApplication(ctx workflow.Context, event MortgageApplicationSubmi
 		}
 		recordTimeline(&app, ctx, "credit_check", TimelineCompleted, "Credit check rejected", meta)
 		upsertSearchAttributes(ctx, &app, false)
-		runSendNotification(ctx, &app, acts, NotificationRejected, failureRate)
+		runSendNotification(ctx, &app, acts, NotificationRejected, event.Scenario, failureRate)
 		return // err is nil; deferred comp is a no-op
 	}
 
@@ -162,7 +169,7 @@ func runMortgageApplication(ctx workflow.Context, event MortgageApplicationSubmi
 	registeredAppID := app.ApplicationID
 	registeredOfferID := app.OfferID
 	comp.Add(func(compCtx workflow.Context) error {
-		return compensateReleaseOffer(compCtx, &app, acts, registeredAppID, registeredOfferID, failureRate)
+		return compensateReleaseOffer(compCtx, &app, acts, registeredAppID, registeredOfferID, event.Scenario, failureRate)
 	})
 
 	if err = runCompleteApplication(ctx, &app, acts, event.Scenario, failureRate); err != nil {
@@ -184,12 +191,12 @@ func runMortgageApplication(ctx workflow.Context, event MortgageApplicationSubmi
 	// are logged and recorded in the audit trail but never propagated, so a
 	// downstream notification problem cannot retroactively trigger
 	// compensation of an already-fulfilled mortgage.
-	runSendNotification(ctx, &app, acts, NotificationApproved, failureRate)
+	runSendNotification(ctx, &app, acts, NotificationApproved, event.Scenario, failureRate)
 
 	return
 }
 
-func runIntake(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities) error {
+func runIntake(ctx, actCtx workflow.Context, app *MortgageApplication, acts *activities.Activities, scenario WorkflowScenario) error {
 	app.CurrentStep = "intake"
 	upsertSearchAttributes(ctx, app, false)
 	recordTimeline(app, ctx, "intake", TimelineStarted, "Application intake started")
@@ -198,6 +205,7 @@ func runIntake(ctx, actCtx workflow.Context, app *MortgageApplication, acts acti
 	if err := workflow.ExecuteActivity(actCtx, acts.Intake, activities.IntakeInput{
 		ApplicationID: app.ApplicationID,
 		ApplicantName: app.ApplicantName,
+		Scenario:      string(scenario),
 	}).Get(ctx, &result); err != nil {
 		return err
 	}
@@ -207,7 +215,7 @@ func runIntake(ctx, actCtx workflow.Context, app *MortgageApplication, acts acti
 	return nil
 }
 
-func requestCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) error {
+func requestCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts *activities.Activities, failureRate int) error {
 	app.Status = StatusCreditCheckPending
 	app.CurrentStep = "credit_check"
 	upsertSearchAttributes(ctx, app, false)
@@ -231,7 +239,7 @@ func requestCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, 
 // operator sends a RetryCreditCheckSignal while the workflow is waiting, the credit
 // check is re-requested and the wait restarts. This loop continues until a result
 // arrives. Each operator retry records an operator_retry_credit_check audit entry.
-func requestAndWaitCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) (CreditCheckCompleted, error) {
+func requestAndWaitCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplication, acts *activities.Activities, failureRate int) (CreditCheckCompleted, error) {
 	for {
 		if err := requestCreditCheck(ctx, actCtx, app, acts, failureRate); err != nil {
 			return CreditCheckCompleted{}, err
@@ -339,7 +347,7 @@ func waitForCreditResultOrRetry(ctx workflow.Context, app *MortgageApplication) 
 //     surfaces as property_valuation/failed and the workflow returns the
 //     error). No offer has been reserved at this point so no compensation is
 //     required.
-func runPropertyValuation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) error {
+func runPropertyValuation(ctx, actCtx workflow.Context, app *MortgageApplication, acts *activities.Activities, failureRate int) error {
 	propertyValue := waitForPropertyValuation(ctx, app)
 
 	app.CurrentStep = "property_valuation"
@@ -442,7 +450,7 @@ func formatPropertyValue(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
-func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) error {
+func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts *activities.Activities, failureRate int) error {
 	app.CurrentStep = "offer_reservation"
 	recordTimeline(app, ctx, "offer_reservation", TimelineStarted, "Offer reservation started")
 	upsertSearchAttributes(ctx, app, false)
@@ -472,7 +480,7 @@ func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication,
 // fail_after_offer_reservation: fails on attempts 1–4, succeeds on attempt 5.
 // fail_and_compensate_after_offer_reservation: fails on all 3 attempts, exhausting
 // the retry policy. The caller is responsible for triggering compensation.
-func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, scenario WorkflowScenario, failureRate int) error {
+func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts *activities.Activities, scenario WorkflowScenario, failureRate int) error {
 	retryPolicy := &temporal.RetryPolicy{
 		InitialInterval:    time.Second,
 		BackoffCoefficient: 2.0,
@@ -528,7 +536,7 @@ func runCompleteApplication(ctx workflow.Context, app *MortgageApplication, acts
 // context is cancelled on failure. applicationID and offerID are passed explicitly
 // rather than read from app to ensure the correct values are used even if app is
 // mutated between registration and execution.
-func compensateReleaseOffer(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, applicationID, offerID string, failureRate int) error {
+func compensateReleaseOffer(ctx workflow.Context, app *MortgageApplication, acts *activities.Activities, applicationID, offerID string, scenario WorkflowScenario, failureRate int) error {
 	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
 	})
@@ -541,6 +549,7 @@ func compensateReleaseOffer(ctx workflow.Context, app *MortgageApplication, acts
 	if err := workflow.ExecuteActivity(actCtx, acts.ReleaseOffer, activities.ReleaseOfferInput{
 		ApplicationID:              applicationID,
 		OfferID:                    offerID,
+		Scenario:                   string(scenario),
 		ExternalFailureRatePercent: failureRate,
 	}).Get(ctx, &result); err != nil {
 		return err
@@ -568,7 +577,7 @@ func compensateReleaseOffer(ctx workflow.Context, app *MortgageApplication, acts
 // the workflow records a notification/failed audit entry and continues
 // without propagating the error, so a notification dispatch problem cannot
 // retroactively trigger compensation of an otherwise successful workflow.
-func runSendNotification(ctx workflow.Context, app *MortgageApplication, acts activities.Activities, status NotificationStatus, failureRate int) {
+func runSendNotification(ctx workflow.Context, app *MortgageApplication, acts *activities.Activities, status NotificationStatus, scenario WorkflowScenario, failureRate int) {
 	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy: &temporal.RetryPolicy{
@@ -590,6 +599,7 @@ func runSendNotification(ctx workflow.Context, app *MortgageApplication, acts ac
 	if err := workflow.ExecuteActivity(actCtx, acts.SendNotification, activities.SendNotificationInput{
 		ApplicationID:              app.ApplicationID,
 		Status:                     string(status),
+		Scenario:                   string(scenario),
 		ExternalFailureRatePercent: failureRate,
 	}).Get(ctx, &result); err != nil {
 		workflow.GetLogger(ctx).Warn("notification dispatch failed; continuing without propagating",
