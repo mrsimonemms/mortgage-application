@@ -207,11 +207,12 @@ func TestMaybeFailExternalDependency(t *testing.T) {
 }
 
 func TestPropertyValuation(t *testing.T) {
-	t.Run("returns a deterministic valuation id", func(t *testing.T) {
+	t.Run("returns a deterministic valuation id and echoes the property value", func(t *testing.T) {
 		env := newTestEnv(t)
 
 		val, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
 			ApplicationID: "APP-001",
+			PropertyValue: 350000,
 		})
 
 		assert.NoError(t, err)
@@ -219,16 +220,39 @@ func TestPropertyValuation(t *testing.T) {
 		assert.NoError(t, val.Get(&result))
 		assert.Equal(t, "APP-001", result.ApplicationID)
 		assert.Equal(t, "VAL-APP-001", result.ValuationID)
+		assert.Equal(t, float64(350000), result.PropertyValue)
 		assert.False(t, result.ValuedAt.IsZero())
 	})
 
 	t.Run("rejects empty application id", func(t *testing.T) {
 		env := newTestEnv(t)
 
-		_, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{})
+		_, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
+			PropertyValue: 350000,
+		})
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "applicationId")
+	})
+
+	// A non-positive property value is treated as a wiring bug rather than a
+	// transient failure, so the activity surfaces a non-retryable error to
+	// avoid wasted retries on a value Temporal cannot meaningfully retry.
+	t.Run("rejects non-positive property value with a non-retryable error", func(t *testing.T) {
+		env := newTestEnv(t)
+
+		_, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
+			ApplicationID: "APP-001",
+			PropertyValue: 0,
+		})
+
+		assert.Error(t, err)
+		var appErr *temporal.ApplicationError
+		errors.As(err, &appErr)
+		if assert.NotNil(t, appErr) {
+			assert.True(t, appErr.NonRetryable())
+		}
+		assert.Contains(t, err.Error(), "propertyValue")
 	})
 
 	// Property valuation participates in the same failure-injection pattern as
@@ -244,6 +268,7 @@ func TestPropertyValuation(t *testing.T) {
 
 		_, err := env.ExecuteActivity(Activities{}.PropertyValuation, PropertyValuationInput{
 			ApplicationID:              "APP-001",
+			PropertyValue:              350000,
 			ExternalFailureRatePercent: MaxExternalFailureRatePercent,
 		})
 

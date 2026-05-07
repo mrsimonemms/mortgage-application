@@ -719,12 +719,103 @@ func TestMortgageApplicationWorkflow_NotificationApprovedPayload(t *testing.T) {
 	assert.Equal(t, string(NotificationApproved), captured.Status)
 }
 
+// signalV2HappyPath signals the credit-check approval and the operator
+// property valuation submission so a v2 happy-path workflow can complete in
+// tests. testValuation is the canonical default value used across v2 tests.
+const testValuation = float64(350000)
+
+func signalV2HappyPath(env *testsuite.TestWorkflowEnvironment, applicationID string) {
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: applicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(PropertyValuationSubmittedSignal, PropertyValuationSubmitted{
+			ApplicationID: applicationID,
+			PropertyValue: testValuation,
+		})
+	}, 2*time.Second)
+}
+
 // TestMortgageApplicationWorkflowV2_HappyPath verifies that the v2 workflow
-// runs the full happy path including the new property valuation step and
-// that the audit trail reflects the correct sequence: credit_check/completed
-// is followed by property_valuation/started and property_valuation/completed
-// before offer_reservation/started.
+// runs the full happy path including the new property valuation wait and
+// activity, and that the audit trail reflects the correct sequence:
+// credit_check/completed is followed by the operator-submitted valuation,
+// then the property_valuation activity, before offer_reservation/started.
 func TestMortgageApplicationWorkflowV2_HappyPath(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	signalV2HappyPath(env, testApplicationID)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var result MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&result))
+
+	assert.Equal(t, StatusCompleted, result.Status)
+	assert.NotEmpty(t, result.OfferID)
+	if assert.NotNil(t, result.PropertyValue, "v2 workflow must record the operator-submitted property value") {
+		assert.Equal(t, testValuation, *result.PropertyValue)
+	}
+
+	steps := make([]string, len(result.Timeline))
+	for i, e := range result.Timeline {
+		steps[i] = e.Step + "/" + string(e.Status)
+	}
+
+	assert.Equal(t, []string{
+		"submitted/completed",
+		"intake/started",
+		"intake/completed",
+		"credit_check/started",
+		"credit_check/waiting",
+		"credit_check/completed",
+		"property_valuation/waiting",
+		"property_valuation_submitted/completed",
+		"property_valuation/started",
+		"property_valuation/completed",
+		"offer_reservation/started",
+		"offer_reservation/completed",
+		"fulfilment/started",
+		"fulfilment/completed",
+		"notification/started",
+		"notification/completed",
+	}, steps)
+
+	// Confirm the property valuation completed entry carries the deterministic
+	// valuation ID and the submitted property value.
+	for _, e := range result.Timeline {
+		if e.Step == "property_valuation" && e.Status == TimelineCompleted {
+			assert.Equal(t, "VAL-"+testApplicationID, e.Metadata["valuationId"])
+			assert.Equal(t, "350000", e.Metadata["propertyValue"])
+		}
+		if e.Step == "property_valuation_submitted" && e.Status == TimelineCompleted {
+			assert.Equal(t, "350000", e.Metadata["propertyValue"])
+		}
+	}
+}
+
+// TestMortgageApplicationWorkflowV2_WaitsForPropertyValuationSignal queries
+// the workflow mid-flight, after credit approval but before the property
+// valuation signal arrives. The query must show the workflow waiting on the
+// property valuation dependency, with no offer reserved yet. After signalling
+// the value, the workflow must continue and complete successfully.
+func TestMortgageApplicationWorkflowV2_WaitsForPropertyValuationSignal(t *testing.T) {
 	testSuite := &testsuite.WorkflowTestSuite{}
 	env := testSuite.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
@@ -744,6 +835,26 @@ func TestMortgageApplicationWorkflowV2_HappyPath(t *testing.T) {
 		})
 	}, time.Second)
 
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow(QueryApplication)
+		assert.NoError(t, err)
+		var app MortgageApplication
+		assert.NoError(t, val.Get(&app))
+
+		assert.Equal(t, "awaiting_property_valuation", app.CurrentStep,
+			"v2 workflow must report the awaiting_property_valuation step")
+		if assert.NotNil(t, app.PendingDependency, "pendingDependency must be set while waiting") {
+			assert.Equal(t, PendingPropertyValuation, *app.PendingDependency)
+		}
+		assert.Empty(t, app.OfferID, "no offer can be reserved before valuation")
+		assert.Nil(t, app.PropertyValue, "no value can be set before submission")
+
+		env.SignalWorkflow(PropertyValuationSubmittedSignal, PropertyValuationSubmitted{
+			ApplicationID: testApplicationID,
+			PropertyValue: testValuation,
+		})
+	}, 2*time.Second)
+
 	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
 
 	assert.True(t, env.IsWorkflowCompleted())
@@ -751,38 +862,59 @@ func TestMortgageApplicationWorkflowV2_HappyPath(t *testing.T) {
 
 	var result MortgageApplication
 	assert.NoError(t, env.GetWorkflowResult(&result))
-
 	assert.Equal(t, StatusCompleted, result.Status)
-	assert.NotEmpty(t, result.OfferID)
+	assert.Nil(t, result.PendingDependency, "pendingDependency must be cleared once submission arrives")
+	if assert.NotNil(t, result.PropertyValue) {
+		assert.Equal(t, testValuation, *result.PropertyValue)
+	}
+}
 
-	steps := make([]string, len(result.Timeline))
-	for i, e := range result.Timeline {
-		steps[i] = e.Step + "/" + string(e.Status)
+// TestMortgageApplicationWorkflowV2_IgnoresNonPositiveValuationSubmission
+// drives a non-positive submission first, confirms the workflow keeps
+// waiting, then sends a valid submission and asserts the workflow completes.
+// Defensive guard against an operator typo or out-of-band signal.
+func TestMortgageApplicationWorkflowV2_IgnoresNonPositiveValuationSubmission(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflowV2)
+	env.RegisterActivity(&activities.Activities{})
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	assert.Equal(t, []string{
-		"submitted/completed",
-		"intake/started",
-		"intake/completed",
-		"credit_check/started",
-		"credit_check/waiting",
-		"credit_check/completed",
-		"property_valuation/started",
-		"property_valuation/completed",
-		"offer_reservation/started",
-		"offer_reservation/completed",
-		"fulfilment/started",
-		"fulfilment/completed",
-		"notification/started",
-		"notification/completed",
-	}, steps)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
+		})
+	}, time.Second)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(PropertyValuationSubmittedSignal, PropertyValuationSubmitted{
+			ApplicationID: testApplicationID,
+			PropertyValue: 0,
+		})
+	}, 2*time.Second)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(PropertyValuationSubmittedSignal, PropertyValuationSubmitted{
+			ApplicationID: testApplicationID,
+			PropertyValue: testValuation,
+		})
+	}, 3*time.Second)
 
-	// Confirm the property valuation completed entry carries the deterministic
-	// valuation ID metadata.
-	for _, e := range result.Timeline {
-		if e.Step == "property_valuation" && e.Status == TimelineCompleted {
-			assert.Equal(t, "VAL-"+testApplicationID, e.Metadata["valuationId"])
-		}
+	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var result MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&result))
+	if assert.NotNil(t, result.PropertyValue) {
+		assert.Equal(t, testValuation, *result.PropertyValue,
+			"only the valid submission should be accepted")
 	}
 }
 
@@ -822,13 +954,7 @@ func TestMortgageApplicationWorkflowV2_PropertyValuationFailureCompensates(t *te
 		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
-			ApplicationID: testApplicationID,
-			Result:        CreditCheckApproved,
-			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
-		})
-	}, time.Second)
+	signalV2HappyPath(env, testApplicationID)
 
 	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
 
@@ -889,13 +1015,7 @@ func TestMortgageApplicationWorkflowV2_NotificationOnApproved(t *testing.T) {
 		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 
-	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
-			ApplicationID: testApplicationID,
-			Result:        CreditCheckApproved,
-			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
-		})
-	}, time.Second)
+	signalV2HappyPath(env, testApplicationID)
 
 	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
 
@@ -924,13 +1044,7 @@ func TestMortgageApplicationWorkflowV2_CompensationStillReleasesOffer(t *testing
 		Scenario:      ScenarioFailAndCompensate,
 	}
 
-	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
-			ApplicationID: testApplicationID,
-			Result:        CreditCheckApproved,
-			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC),
-		})
-	}, time.Second)
+	signalV2HappyPath(env, testApplicationID)
 
 	env.ExecuteWorkflow(MortgageApplicationWorkflowV2, input)
 

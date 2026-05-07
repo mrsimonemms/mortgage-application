@@ -2,6 +2,8 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 import { APPLICATION_WORKFLOW_STATUSES } from '../models/application-workflow-status.type';
 import type { ApplicationWorkflowStatus } from '../models/application-workflow-status.type';
+import { WORKFLOW_VERSIONS } from '../models/workflow-version.type';
+import type { WorkflowVersion } from '../models/workflow-version.type';
 
 export class ApplicationListItemDto {
   @ApiProperty({ description: 'Unique identifier for the application' })
@@ -20,4 +22,19 @@ export class ApplicationListItemDto {
     example: 'running',
   })
   workflowStatus: ApplicationWorkflowStatus;
+
+  @ApiPropertyOptional({
+    description:
+      'Workflow version (derived from the Worker Build ID): v1, v2, or unknown',
+    enum: WORKFLOW_VERSIONS,
+    example: 'v1',
+  })
+  workflowVersion?: WorkflowVersion;
+
+  @ApiPropertyOptional({
+    description:
+      'Raw Worker Build ID Temporal recorded for this execution, when available',
+    example: 'mortgage-worker-v1',
+  })
+  workerBuildId?: string;
 }

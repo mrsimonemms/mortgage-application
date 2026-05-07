@@ -5,6 +5,8 @@
     isNonRunningTerminal,
     lifecycleLabel,
     statusLabel,
+    workflowVersionLabel,
+    workflowVersionStyle,
   } from '$lib/utils';
 
   let {
@@ -173,11 +175,34 @@
         {statusLabel(app.status)}
       </span>
     </dd>
+    <dt>Workflow Version</dt>
+    <dd>
+      <span
+        class="badge"
+        style={workflowVersionStyle(app.workflowVersion ?? 'unknown')}
+      >
+        {workflowVersionLabel(app.workflowVersion ?? 'unknown')}
+      </span>
+    </dd>
+    {#if app.workerBuildId}
+      <dt>Worker Build ID</dt>
+      <dd class="mono">{app.workerBuildId}</dd>
+    {/if}
     <dt>Current Step</dt>
     <dd class="mono">{app.currentStep}</dd>
     {#if app.offerId}
       <dt>Offer ID</dt>
       <dd class="mono">{app.offerId}</dd>
+    {/if}
+    {#if app.propertyValue !== undefined}
+      <dt>Property Value</dt>
+      <dd>
+        {new Intl.NumberFormat('en-GB', {
+          style: 'currency',
+          currency: 'GBP',
+          maximumFractionDigits: 0,
+        }).format(app.propertyValue)}
+      </dd>
     {/if}
     {#if isWaiting}
       <dt>Waiting For</dt>

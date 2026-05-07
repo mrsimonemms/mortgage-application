@@ -10,6 +10,11 @@ const CreditCheckSLA = 30 * time.Second
 // the workflow is durably waiting for the credit bureau signal.
 const PendingCreditCheck = "credit_check"
 
+// PendingPropertyValuation names the property valuation dependency in query
+// responses while the v2 workflow is durably waiting for the operator-supplied
+// property value. v1 never sets this dependency.
+const PendingPropertyValuation = "property_valuation"
+
 // WorkflowScenario controls which demo path the workflow executes.
 type WorkflowScenario string
 
@@ -57,6 +62,15 @@ type CreditCheckCompleted struct {
 	Result        CreditCheckResult `json:"result"`
 	CompletedAt   time.Time         `json:"completedAt"`
 	Reference     string            `json:"reference,omitempty"`
+}
+
+// PropertyValuationSubmitted is the payload of the
+// PropertyValuationSubmittedSignal sent to the v2 workflow when the operator
+// provides a property value through the API. The value is in pounds (whole
+// units; not pence).
+type PropertyValuationSubmitted struct {
+	ApplicationID string  `json:"applicationId"`
+	PropertyValue float64 `json:"propertyValue"`
 }
 
 type OfferReserved struct {

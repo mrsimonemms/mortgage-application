@@ -12,7 +12,11 @@
     MortgageApplication,
     ScenarioOption,
   } from '$lib/types';
-  import { workflowStatusLabel } from '$lib/utils';
+  import {
+    workflowStatusLabel,
+    workflowVersionLabel,
+    workflowVersionStyle,
+  } from '$lib/utils';
   import { untrack } from 'svelte';
 
   import type { PageData } from './$types';
@@ -91,7 +95,23 @@
     scenarioOptions.find((s) => s.name === startScenario)?.description ?? '',
   );
   const showFailureSlider = $derived(allowsFailureInjection(startScenario));
-  const isCreditCheckPending = $derived(app?.status === 'credit_check_pending');
+  // Action visibility is gated on the precise pending dependency reported by
+  // the workflow rather than a broad business-status flag, so the form only
+  // appears while the workflow is genuinely waiting for that specific
+  // operator input.
+  const isCreditCheckPending = $derived(
+    app?.workflowStatus === 'running' &&
+      app?.pendingDependency === 'credit_check',
+  );
+  // v2 workflow is waiting for the operator to submit a property value. This
+  // is the gate that drives the "Submit Property Valuation" UI action and is
+  // only ever true when the worker is the v2 build with no value submitted
+  // yet.
+  const isPropertyValuationPending = $derived(
+    app?.workflowStatus === 'running' &&
+      app?.workflowVersion === 'v2' &&
+      app?.pendingDependency === 'property_valuation',
+  );
   const isTerminal = $derived(app ? TERMINAL.has(app.status) : false);
   // Polling tracks the workflow's lifecycle state, NOT the business state.
   // The two diverge: the workflow can have business `status === 'completed'`
@@ -333,6 +353,17 @@
               <div class="app-item-meta">
                 <span
                   class="badge"
+                  style={workflowVersionStyle(
+                    item.workflowVersion ?? 'unknown',
+                  )}
+                  title={item.workerBuildId
+                    ? `Worker Build ID: ${item.workerBuildId}`
+                    : 'Workflow version'}
+                >
+                  {workflowVersionLabel(item.workflowVersion ?? 'unknown')}
+                </span>
+                <span
+                  class="badge"
                   style={workflowStatusStyle(item.workflowStatus)}
                 >
                   {workflowStatusLabel(item.workflowStatus)}
@@ -366,6 +397,7 @@
         {app}
         {isTerminal}
         {isCreditCheckPending}
+        {isPropertyValuationPending}
         onRefresh={doRefresh}
         onRerun={handleRerun}
       />

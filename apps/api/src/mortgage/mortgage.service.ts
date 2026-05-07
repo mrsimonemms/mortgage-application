@@ -21,6 +21,8 @@ import {
 } from './models/application-workflow-status.type';
 import { MortgageApplication } from './models/mortgage-application.model';
 import { MortgageScenario } from './models/mortgage-scenario.type';
+import { extractWorkerBuildId } from './models/worker-build-id';
+import { deriveWorkflowVersion } from './models/workflow-version.type';
 
 // The workflow type name is the short function name that the Temporal Go SDK
 // derives from runtime.FuncForPC. It must match the Go worker registration.
@@ -28,6 +30,7 @@ const WORKFLOW_TYPE = 'MortgageApplicationWorkflow';
 const TASK_QUEUE = 'mortgage-application';
 const SIGNAL_CREDIT_CHECK_COMPLETED = 'credit-check-completed';
 const SIGNAL_RETRY_CREDIT_CHECK = 'retry-credit-check';
+const SIGNAL_PROPERTY_VALUATION_SUBMITTED = 'property-valuation-submitted';
 const QUERY_GET_APPLICATION = 'getApplication';
 
 const STATUS_RUNNING =
@@ -76,9 +79,18 @@ export class MortgageService {
         handle.describe(),
         handle.query<MortgageApplication>(QUERY_GET_APPLICATION),
       ]);
+      // desc.raw is a DescribeWorkflowExecutionResponse, with the
+      // WorkflowExecutionInfo (which carries the versioning fields) nested
+      // under workflowExecutionInfo. Pass that nested info to the helper so
+      // both the describe and list paths use the same extraction logic.
+      const workerBuildId = extractWorkerBuildId(
+        desc.raw?.workflowExecutionInfo ?? undefined,
+      );
       return {
         ...app,
         workflowStatus: normaliseWorkflowStatus(desc.status.code),
+        workflowVersion: deriveWorkflowVersion(workerBuildId),
+        ...(workerBuildId !== undefined && { workerBuildId }),
       };
     } catch (err) {
       if (err instanceof WorkflowNotFoundError) {
@@ -173,6 +185,45 @@ export class MortgageService {
     await handle.signal(SIGNAL_RETRY_CREDIT_CHECK);
   }
 
+  // submitPropertyValuation signals the v2 workflow with the operator-supplied
+  // property value. Validation is performed by the DTO (number, positive) and
+  // re-asserted here so a malformed direct service call cannot bypass the
+  // boundary checks. The workflow itself defensively ignores non-positive
+  // submissions, but the API rejects them up front so the operator gets a
+  // clear error rather than a silent no-op. Sent at any time on a running
+  // workflow: v1 does not register the signal so a misrouted submission is
+  // harmlessly buffered until the workflow closes.
+  async submitPropertyValuation(
+    applicationId: string,
+    propertyValue: number,
+  ): Promise<void> {
+    if (typeof propertyValue !== 'number' || !Number.isFinite(propertyValue)) {
+      throw new BadRequestException(
+        'propertyValue must be a finite number in pounds',
+      );
+    }
+    if (propertyValue <= 0) {
+      throw new BadRequestException('propertyValue must be a positive number');
+    }
+
+    if (!(await this.isWorkflowRunning(this.workflowId(applicationId)))) {
+      throw new NotFoundException(`Application ${applicationId} not found`);
+    }
+
+    this.logger.log(
+      { applicationId, propertyValue },
+      'Sending property-valuation-submitted signal',
+    );
+
+    const handle = this.client.workflow.getHandle(
+      this.workflowId(applicationId),
+    );
+    await handle.signal(SIGNAL_PROPERTY_VALUATION_SUBMITTED, {
+      applicationId,
+      propertyValue,
+    });
+  }
+
   async rerunApplication(
     applicationId: string,
   ): Promise<{ applicationId: string; workflowId: string }> {
@@ -251,6 +302,16 @@ export class MortgageService {
         return this.retryCreditCheck(applicationId);
       case 'rerun_application':
         return this.rerunApplication(applicationId);
+      case 'submit_property_valuation':
+        if (!action.propertyValuation) {
+          throw new BadRequestException(
+            'propertyValuation is required for submit_property_valuation',
+          );
+        }
+        return this.submitPropertyValuation(
+          applicationId,
+          action.propertyValuation.propertyValue,
+        );
     }
   }
 
@@ -286,33 +347,84 @@ export class MortgageService {
     // dependency on the SDK's spelling of the equivalent name.
     const workflowStatus = normaliseWorkflowStatus(info.status.code);
     const memo = this.readMemo(info.memo);
+    const handle = this.client.workflow.getHandle(info.workflowId);
+
+    // Worker Build ID lives on the raw proto. Visibility data (info.raw) is
+    // not a reliable source: ListWorkflowExecutions is served from the
+    // visibility store, which does not always populate the Worker
+    // Deployment Versioning fields (versioningInfo / assignedBuildId). The
+    // detail path reaches the same data via handle.describe(), which goes
+    // to the workflow shard. Calling describe() here too gives the list
+    // and detail responses the same source of truth for workflowVersion
+    // and workerBuildId. The describe call is allowed to fail silently —
+    // if it does, the list still renders with workflowVersion=unknown
+    // rather than failing the whole request.
+    const workerBuildId = await this.resolveWorkerBuildId(info, handle);
 
     if (memo.applicantName !== undefined) {
-      return this.toApplicationListItem(info.workflowId, workflowStatus, memo);
+      return this.toApplicationListItem(
+        info.workflowId,
+        workflowStatus,
+        memo,
+        workerBuildId,
+      );
     }
 
     // Legacy workflows without memo — fall back to query or result
-    const handle = this.client.workflow.getHandle(info.workflowId);
-
     if (workflowStatus === 'running') {
       const app = await handle.query<MortgageApplication>(
         QUERY_GET_APPLICATION,
       );
-      return this.toApplicationListItem(info.workflowId, workflowStatus, {
-        applicationId: app.applicationId,
-        applicantName: app.applicantName,
-      });
+      return this.toApplicationListItem(
+        info.workflowId,
+        workflowStatus,
+        {
+          applicationId: app.applicationId,
+          applicantName: app.applicantName,
+        },
+        workerBuildId,
+      );
     }
 
     if (workflowStatus === 'completed') {
       const app = (await handle.result()) as MortgageApplication;
-      return this.toApplicationListItem(info.workflowId, workflowStatus, {
-        applicationId: app.applicationId,
-        applicantName: app.applicantName,
-      });
+      return this.toApplicationListItem(
+        info.workflowId,
+        workflowStatus,
+        {
+          applicationId: app.applicationId,
+          applicantName: app.applicantName,
+        },
+        workerBuildId,
+      );
     }
 
-    return this.toApplicationListItem(info.workflowId, workflowStatus, {});
+    return this.toApplicationListItem(
+      info.workflowId,
+      workflowStatus,
+      {},
+      workerBuildId,
+    );
+  }
+
+  // resolveWorkerBuildId tries the visibility data first (cheap; works when
+  // the visibility store has versioningInfo/assignedBuildId populated) and
+  // falls back to a describe call (one extra round trip per list item, but
+  // matches the detail path exactly). Errors from describe are swallowed:
+  // a deleted/race-condition workflow should not break the whole list.
+  private async resolveWorkerBuildId(
+    info: WorkflowExecutionInfo,
+    handle: ReturnType<Client['workflow']['getHandle']>,
+  ): Promise<string | undefined> {
+    const fromVisibility = extractWorkerBuildId(info.raw);
+    if (fromVisibility) return fromVisibility;
+
+    try {
+      const desc = await handle.describe();
+      return extractWorkerBuildId(desc.raw?.workflowExecutionInfo ?? undefined);
+    } catch {
+      return undefined;
+    }
   }
 
   private allowsFailureInjection(scenario: string): boolean {
@@ -348,6 +460,7 @@ export class MortgageService {
     workflowId: string,
     workflowStatus: ApplicationWorkflowStatus,
     data: { applicationId?: string; applicantName?: string; scenario?: string },
+    workerBuildId?: string,
   ): ApplicationListItemDto {
     return {
       applicationId:
@@ -355,6 +468,8 @@ export class MortgageService {
       applicantName: data.applicantName ?? '',
       scenario: data.scenario,
       workflowStatus,
+      workflowVersion: deriveWorkflowVersion(workerBuildId),
+      ...(workerBuildId !== undefined && { workerBuildId }),
     };
   }
 }

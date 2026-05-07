@@ -49,9 +49,13 @@ type MortgageApplication struct {
 	Status        ApplicationStatus `json:"status"`
 	CurrentStep   string            `json:"currentStep"`
 	OfferID       string            `json:"offerId,omitempty"`
-	CreatedAt     time.Time         `json:"createdAt"`
-	UpdatedAt     time.Time         `json:"updatedAt"`
-	Timeline      []TimelineEntry   `json:"timeline"`
+	// PropertyValue is the operator-supplied property valuation in pounds.
+	// Populated by the v2 workflow once the PropertyValuationSubmittedSignal
+	// arrives. v1 workflows never populate this field.
+	PropertyValue *float64        `json:"propertyValue,omitempty"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	UpdatedAt     time.Time       `json:"updatedAt"`
+	Timeline      []TimelineEntry `json:"timeline"`
 
 	// SLA visibility for async dependencies. PendingDependency and PendingSince
 	// are transient: they are only set while the workflow is durably waiting

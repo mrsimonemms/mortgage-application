@@ -1,6 +1,7 @@
 package mortgage
 
 import (
+	"strconv"
 	"time"
 
 	saga "github.com/mrsimonemms/golang-helpers/temporal"
@@ -323,26 +324,45 @@ func waitForCreditResultOrRetry(ctx workflow.Context, app *MortgageApplication) 
 
 // runPropertyValuation executes the property valuation step. It is invoked only
 // by the v2 workflow profile, after a successful credit and AML check and
-// before offer reservation. The activity uses the same retry/failure semantics
-// as other external dependencies in the workflow: Temporal drives retries for
-// retryable errors, and a final failure surfaces as a property_valuation/failed
-// audit entry before the workflow returns the error. No offer has been
-// reserved at this point so no compensation is required.
+// before offer reservation.
+//
+// The step has three phases, all recorded on the audit trail:
+//  1. property_valuation/requested — the workflow records that an operator
+//     property value is required and durably waits on the
+//     PropertyValuationSubmittedSignal. While waiting, PendingDependency is
+//     set so the UI can show the "Submit Property Valuation" action.
+//  2. property_valuation/submitted — the operator's value has arrived and
+//     been recorded on the application state.
+//  3. property_valuation/started → property_valuation/completed (or /failed)
+//     — the activity runs against the submitted value with the standard
+//     retry/failure semantics (Temporal drives retries; a final failure
+//     surfaces as property_valuation/failed and the workflow returns the
+//     error). No offer has been reserved at this point so no compensation is
+//     required.
 func runPropertyValuation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) error {
+	propertyValue := waitForPropertyValuation(ctx, app)
+
 	app.CurrentStep = "property_valuation"
 	upsertSearchAttributes(ctx, app, false)
 	recordTimeline(app, ctx, "property_valuation", TimelineStarted,
 		"Property valuation started",
-		map[string]string{"applicationId": app.ApplicationID})
+		map[string]string{
+			"applicationId": app.ApplicationID,
+			"propertyValue": formatPropertyValue(propertyValue),
+		})
 
 	var result activities.PropertyValuationResult
 	if err := workflow.ExecuteActivity(actCtx, acts.PropertyValuation, activities.PropertyValuationInput{
 		ApplicationID:              app.ApplicationID,
+		PropertyValue:              propertyValue,
 		ExternalFailureRatePercent: failureRate,
 	}).Get(ctx, &result); err != nil {
 		recordTimeline(app, ctx, "property_valuation", TimelineFailed,
 			"Property valuation failed",
-			map[string]string{"applicationId": app.ApplicationID})
+			map[string]string{
+				"applicationId": app.ApplicationID,
+				"propertyValue": formatPropertyValue(propertyValue),
+			})
 		return err
 	}
 
@@ -351,10 +371,75 @@ func runPropertyValuation(ctx, actCtx workflow.Context, app *MortgageApplication
 		map[string]string{
 			"applicationId": app.ApplicationID,
 			"valuationId":   result.ValuationID,
+			"propertyValue": formatPropertyValue(propertyValue),
 		})
 	upsertSearchAttributes(ctx, app, false)
 
 	return nil
+}
+
+// waitForPropertyValuation blocks the workflow durably until the operator
+// submits a property value via PropertyValuationSubmittedSignal. While
+// blocked PendingDependency is set so the UI can show the "Submit Property
+// Valuation" action; both the dependency and PendingSince are cleared once
+// a positive value arrives.
+//
+// Non-positive submissions (e.g. an operator typo) are rejected at the wait
+// boundary and the workflow keeps waiting for a valid value. This keeps
+// invariants simple downstream: the activity only ever sees positive values.
+func waitForPropertyValuation(ctx workflow.Context, app *MortgageApplication) float64 {
+	app.CurrentStep = "awaiting_property_valuation"
+
+	pendingDep := PendingPropertyValuation
+	pendingSince := workflow.Now(ctx)
+	app.PendingDependency = &pendingDep
+	app.PendingSince = &pendingSince
+
+	recordTimeline(app, ctx, "property_valuation", TimelineWaiting,
+		"Awaiting operator property valuation",
+		map[string]string{"applicationId": app.ApplicationID})
+	upsertSearchAttributes(ctx, app, true)
+
+	ch := workflow.GetSignalChannel(ctx, PropertyValuationSubmittedSignal)
+	var submitted PropertyValuationSubmitted
+	for {
+		ch.Receive(ctx, &submitted)
+		if submitted.PropertyValue > 0 {
+			break
+		}
+		// Ignore non-positive submissions: keep waiting for a valid value
+		// rather than corrupting downstream state. The API rejects this case
+		// up front, but the workflow remains defensive.
+		workflow.GetLogger(ctx).Warn("ignoring non-positive property valuation; awaiting a valid value",
+			"applicationId", app.ApplicationID,
+			"propertyValue", submitted.PropertyValue,
+		)
+	}
+
+	value := submitted.PropertyValue
+	app.PropertyValue = &value
+	app.PendingDependency = nil
+	app.PendingSince = nil
+
+	// The operator submission is recorded under a distinct step name so the
+	// /completed entry on the property_valuation step itself remains owned
+	// by the activity success path.
+	recordTimeline(app, ctx, "property_valuation_submitted", TimelineCompleted,
+		"Operator submitted property valuation",
+		map[string]string{
+			"applicationId": app.ApplicationID,
+			"propertyValue": formatPropertyValue(value),
+		})
+	upsertSearchAttributes(ctx, app, false)
+
+	return value
+}
+
+// formatPropertyValue renders a property value as a plain numeric string for
+// audit metadata. Audit metadata is map[string]string by contract; a numeric
+// formatter keeps the trail self-consistent and avoids locale surprises.
+func formatPropertyValue(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 func runOfferReservation(ctx, actCtx workflow.Context, app *MortgageApplication, acts activities.Activities, failureRate int) error {
