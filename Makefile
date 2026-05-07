@@ -21,6 +21,7 @@ endif
 .PHONY: cruft-update
 
 deploy:
+	@$(MAKE) destroy
 	@docker compose up
 .PHONY: deploy
 
@@ -29,8 +30,8 @@ deploy-v2:
 .PHONY: deploy-v2
 
 destroy:
-	@docker compose --profile v2 down --volumes --remove-orphans
-	@docker compose down --remove-orphans
+	@docker compose --profile v2 down --volumes --remove-orphans -v
+	@docker compose down --remove-orphans -v
 .PHONY: destroy
 
 generate-db-migrations:
