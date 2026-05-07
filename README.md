@@ -28,7 +28,9 @@ handling and safe workflow evolution.
 This is a reusable Temporal demo built around a realistic mortgage
 application flow. It is intended for live demonstrations and self-paced
 learning, not as production software. The mortgage domain is intentionally
-simplified so the orchestration story stays in focus.
+simplified so the orchestration story stays in focus. This demo also
+includes a simulated defect scenario showing how Temporal behaves when a
+faulty deployment is introduced.
 
 The repository is split into three applications:
 
@@ -277,11 +279,12 @@ This is expected. When `make deploy-v2` is run, the v2 target becomes
 available automatically.
 
 This is intentionally lightweight. Application logs remain plain
-structured logs and metrics are scoped to the demo. A production
-platform would normally ship logs and metrics to existing tooling such
-as Prometheus, Grafana, Datadog, Splunk or ELK. The demo proves the
-metrics integration path rather than building a full observability
-platform.
+structured logs and metrics are scoped to the demo. All logs include
+the ApplicationId and can be correlated with workflow execution in
+Temporal. A production platform would normally ship logs and metrics
+to existing tooling such as Prometheus, Grafana, Datadog, Splunk or
+ELK. The demo proves the metrics integration path rather than building
+a full observability platform.
 
 #### Custom metric labels
 
