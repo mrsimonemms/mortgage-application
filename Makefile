@@ -2,6 +2,8 @@ APPS = ./apps
 PACKAGES = ./packages
 PROTO = ./proto
 
+COMPOSE ?= docker-compose
+
 TEMPORAL_ADDRESS ?= temporal:7233
 WORKER_DEPLOYMENT_NAME ?= mortgage-worker
 DEPLOYMENT_VERSION ?= mortgage-worker-v2
@@ -22,21 +24,21 @@ endif
 
 deploy:
 	@$(MAKE) destroy
-	@docker compose up
+	@$(COMPOSE) up
 .PHONY: deploy
 
 deploy-v2:
-	@docker compose --profile v2 up -d --remove-orphans
+	@$(COMPOSE) --profile v2 up -d --remove-orphans
 .PHONY: deploy-v2
 
 destroy:
-	@docker compose --profile v2 down --volumes --remove-orphans -v
-	@docker compose down --remove-orphans -v
+	@$(COMPOSE) --profile v2 down --volumes --remove-orphans -v
+	@$(COMPOSE) down --remove-orphans -v
 .PHONY: destroy
 
 generate-db-migrations:
 	$(shell if [ -z "${NAME}" ]; then echo "NAME must be set"; exit 1; fi)
-	docker compose run --rm api npm run migration:generate -- ./src/migrations/${NAME}
+	$(COMPOSE) run --rm api npm run migration:generate -- ./src/migrations/${NAME}
 .PHONY: generate-db-migrations
 
 generate-grpc:
@@ -68,7 +70,7 @@ install-js-deps:
 #   make set-worker-version                                          # promote v2 (default)
 #   DEPLOYMENT_VERSION=mortgage-worker-v1 make set-worker-version    # roll back to v1
 set-worker-version:
-	@docker compose run --rm \
+	@$(COMPOSE) run --rm \
 		-e BOOTSTRAP_ONLY=0 \
 		-e TEMPORAL_ADDRESS=$(TEMPORAL_ADDRESS) \
 		-e WORKER_DEPLOYMENT_NAME=$(WORKER_DEPLOYMENT_NAME) \

@@ -1,4 +1,4 @@
-FROM golang AS dev
+FROM docker.io/library/golang AS dev
 ARG APP
 ARG GIT_COMMIT
 ARG GIT_REPO
@@ -8,17 +8,17 @@ ENV CGO_ENABLED=0
 ENV GOOS=linux
 ENV GOCACHE=/go/.cache
 ENV GRPC_HEALTH_PROBE_VERSION="${GRPC_HEALTH_PROBE_VERSION}"
-USER 1000
+ENV HOME=/tmp
 WORKDIR /go/root
 COPY . .
 WORKDIR /go/root/apps/$APP
 RUN go install ./... \
   && wget -qO /go/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-amd64 \
   && chmod +x /go/bin/grpc_health_probe
-COPY --from=cosmtrek/air /go/bin/air /go/bin/air
+COPY --from=docker.io/cosmtrek/air /go/bin/air /go/bin/air
 CMD [ "air", "-build.stop_on_error", "true", "-build.send_interrupt", "true", "-build.rerun", "true" ]
 
-FROM golang AS builder
+FROM docker.io/library/golang AS builder
 ARG APP
 ARG GIT_COMMIT
 ARG GIT_REPO
