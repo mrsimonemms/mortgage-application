@@ -266,6 +266,15 @@ func requestAndWaitCreditCheck(ctx, actCtx workflow.Context, app *MortgageApplic
 // the workflow is waiting on an external signal, and stale transient data is
 // not surfaced once the wait resolves.
 //
+// SLA visibility runs in parallel with the wait via a Temporal timer. If the
+// timer fires before the credit signal arrives, the SLA breach is recorded
+// durably on the application and the WithinSLA search attribute is upserted
+// to false straight away, so external observers see the breach without having
+// to wait for the eventual signal. The wait itself is not unblocked, cancelled
+// or failed by the timer: SLA expiry is observability state only. If the
+// signal later arrives the breach is preserved; WithinSLA is never flipped
+// back to true.
+//
 // On a successful credit completion the durable SLA outcome (SLAStatus and
 // SLABreached) is captured before the transient deadline is cleared, and the
 // WithinSLA search attribute is updated. Operator retries reset SLA tracking
@@ -291,28 +300,77 @@ func waitForCreditResultOrRetry(ctx workflow.Context, app *MortgageApplication) 
 	creditCheckCh := workflow.GetSignalChannel(ctx, CreditCheckCompletedSignal)
 	retryCh := workflow.GetSignalChannel(ctx, RetryCreditCheckSignal)
 
-	var result CreditCheckCompleted
-	var retried bool
+	// SLA timer races against the wait. The cancellable child context lets the
+	// timer be released cleanly when the wait resolves first, so a workflow
+	// that finishes inside its SLA does not leave a pending-cancel timer in
+	// the history.
+	slaTimerCtx, cancelSLATimer := workflow.WithCancel(ctx)
+	defer cancelSLATimer()
+	slaTimer := workflow.NewTimerWithOptions(slaTimerCtx, CreditCheckSLA, workflow.TimerOptions{
+		Summary: "SLA deadline",
+	})
 
-	workflow.NewSelector(ctx).
-		AddReceive(creditCheckCh, func(c workflow.ReceiveChannel, _ bool) {
+	var (
+		result   CreditCheckCompleted
+		retried  bool
+		resolved bool
+		slaArmed = true
+	)
+
+	for !resolved {
+		sel := workflow.NewSelector(ctx)
+		sel.AddReceive(creditCheckCh, func(c workflow.ReceiveChannel, _ bool) {
 			c.Receive(ctx, &result)
-		}).
-		AddReceive(retryCh, func(c workflow.ReceiveChannel, _ bool) {
+			resolved = true
+		})
+		sel.AddReceive(retryCh, func(c workflow.ReceiveChannel, _ bool) {
 			c.Receive(ctx, nil)
 			retried = true
-		}).
-		Select(ctx)
+			resolved = true
+		})
+		if slaArmed {
+			sel.AddFuture(slaTimer, func(f workflow.Future) {
+				// One-shot: the timer is dropped from subsequent selector
+				// iterations so the breach handling cannot fire twice.
+				slaArmed = false
+				// A cancelled timer means the wait already resolved within
+				// SLA; the breach path must not run.
+				if err := f.Get(ctx, nil); err != nil {
+					return
+				}
+				breached := true
+				status := SLAStatusBreached
+				app.SLAStatus = &status
+				app.SLABreached = &breached
+				recordTimeline(app, ctx, "credit_check_sla", TimelineFailed,
+					"Credit check SLA breached; still awaiting result",
+					map[string]string{
+						"applicationId": app.ApplicationID,
+						"slaDeadline":   slaDeadline.UTC().Format(time.RFC3339),
+					})
+				// Surface the breach immediately so external observers do
+				// not have to wait for the signal. AwaitingExternalSignal
+				// stays true: the workflow is still durably waiting.
+				upsertSearchAttributes(ctx, app, true)
+			})
+		}
+		sel.Select(ctx)
+	}
 
 	if retried {
 		// Operator retry: drop the in-flight deadline so the next iteration's
 		// fresh deadline is the only one in scope. The persistent outcome
-		// fields were already nil while this wait was running.
+		// fields were already nil while this wait was running, or were set
+		// by the timer only for the attempt that just ended.
 		app.SLADeadline = nil
-	} else {
-		// Capture the final SLA outcome durably. SLADeadline is intentionally
-		// retained so the UI and audit trail can continue to show against
-		// which deadline the wait was evaluated.
+		app.SLAStatus = nil
+		app.SLABreached = nil
+	} else if app.SLABreached == nil {
+		// Signal beat the timer (or the timer was never armed for any other
+		// reason). SLADeadline is intentionally retained so the UI and audit
+		// trail can continue to show against which deadline the wait was
+		// evaluated. If the timer already recorded a breach the durable
+		// outcome is left untouched, so WithinSLA never flips back to true.
 		breached := workflow.Now(ctx).After(slaDeadline)
 		status := SLAStatusWithin
 		if breached {
