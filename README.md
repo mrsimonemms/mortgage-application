@@ -16,6 +16,7 @@ handling and safe workflow evolution.
   * [Suggested demo flow](#suggested-demo-flow)
   * [Observability and metrics](#observability-and-metrics)
     * [Grafana provisioning](#grafana-provisioning)
+    * [Workflow search attributes](#workflow-search-attributes)
     * [Custom metric labels](#custom-metric-labels)
     * [Useful Prometheus queries](#useful-prometheus-queries)
     * [Suggested Grafana demo flow](#suggested-grafana-demo-flow)
@@ -316,6 +317,41 @@ is no manual import or data source setup.
 A fresh clone works immediately. No JSON is fetched at runtime and no
 extra setup command is required.
 
+#### Workflow search attributes
+
+The demo uses Temporal custom search attributes to expose business and
+execution state directly in the Temporal Web UI. They allow workflows
+to be filtered and inspected directly in Temporal while running, without
+querying the API or reading logs.
+
+Available attributes:
+
+* `ApplicationStatus` is the coarse business state, for example
+  `credit_check_pending`, `offer_reserved` or `completed`.
+* `CurrentStep` is the current workflow step, for example
+  `awaiting_credit_result`, `property_valuation` or `fulfilment`.
+* `AwaitingExternalSignal` indicates whether the workflow is durably
+  waiting on an external dependency.
+* `HasOffer` indicates whether an offer has been reserved.
+* `WithinSLA` indicates whether the workflow is still within SLA for the
+  current async dependency. It is updated by a workflow timer so a
+  breach becomes visible in the Web UI before the external update
+  arrives.
+
+`ApplicationStatus` and `CurrentStep` are intentionally separate. The
+former gives a stable business view, while the latter gives a more
+detailed execution view.
+
+Suggested demo flow:
+
+1. Open Temporal Web UI at <http://localhost:8233>.
+2. Start a new application from the UI.
+3. Observe `ApplicationStatus`, `CurrentStep` and `AwaitingExternalSignal`
+   while the workflow is waiting for the credit check.
+4. Wait past the SLA without submitting the credit check result.
+5. Observe `WithinSLA=false` while the workflow is still running.
+6. Submit the credit check result and observe normal continuation.
+
 #### Custom metric labels
 
 The mortgage business metrics carry these labels:
@@ -396,7 +432,7 @@ Shows compensation grouped by worker version and scenario.
 
 #### Suggested Grafana demo flow
 
-1. Open Grafana at <http://localhost:3000>.
+1. Open Grafana at <http://localhost:3001>.
 2. Open the **Mortgage Application Demo** dashboard from the
    `Mortgage Demo` folder.
 3. Confirm the worker scrape health panel shows the v1 worker as `Up`.
