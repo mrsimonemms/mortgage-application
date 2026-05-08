@@ -641,6 +641,141 @@ func TestMortgageApplicationWorkflow_SLABreached(t *testing.T) {
 	assert.Nil(t, final.PendingSince, "pendingSince must be cleared after wait resolves")
 }
 
+// TestMortgageApplicationWorkflow_SLAUpsertedBeforeSignal confirms that the
+// workflow surfaces the SLA breach via the durable application state and the
+// audit timeline as soon as the SLA timer fires, without waiting for the
+// eventual credit signal. The query is taken at a virtual time that is past
+// the deadline but before the signal arrives.
+func TestMortgageApplicationWorkflow_SLAUpsertedBeforeSignal(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(testActivities)
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	// At 35s the SLA timer (30s) has fired but the credit signal (90s) has
+	// not arrived. Querying here verifies that the breach is observable
+	// during the wait, not just after the signal eventually lands.
+	env.RegisterDelayedCallback(func() {
+		val, err := env.QueryWorkflow(QueryApplication)
+		assert.NoError(t, err)
+
+		var app MortgageApplication
+		assert.NoError(t, val.Get(&app))
+
+		// Workflow is still durably waiting — SLA expiry must not unblock it.
+		assert.Equal(t, "awaiting_credit_result", app.CurrentStep)
+		if assert.NotNil(t, app.PendingDependency,
+			"workflow must still be waiting for the credit signal") {
+			assert.Equal(t, PendingCreditCheck, *app.PendingDependency)
+		}
+
+		// SLA breach must be visible in durable state before the signal arrives.
+		if assert.NotNil(t, app.SLAStatus, "slaStatus must be set after SLA timer fires") {
+			assert.Equal(t, SLAStatusBreached, *app.SLAStatus)
+		}
+		if assert.NotNil(t, app.SLABreached) {
+			assert.True(t, *app.SLABreached)
+		}
+
+		// And the breach must be recorded in the audit timeline exactly once.
+		breachCount := 0
+		for _, e := range app.Timeline {
+			if e.Step == "credit_check_sla" && e.Status == TimelineFailed {
+				breachCount++
+			}
+		}
+		assert.Equal(t, 1, breachCount,
+			"SLA breach timeline event must be recorded exactly once")
+	}, 35*time.Second)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 1, 30, 0, time.UTC),
+		})
+	}, 90*time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var final MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&final))
+
+	// Late signal must not flip the breach back to within: WithinSLA, once
+	// false, stays false for this attempt.
+	if assert.NotNil(t, final.SLAStatus) {
+		assert.Equal(t, SLAStatusBreached, *final.SLAStatus)
+	}
+	if assert.NotNil(t, final.SLABreached) {
+		assert.True(t, *final.SLABreached)
+	}
+
+	// Replay safety: the breach event must not duplicate after the workflow
+	// completes (replay would otherwise produce a second entry).
+	breachCount := 0
+	for _, e := range final.Timeline {
+		if e.Step == "credit_check_sla" && e.Status == TimelineFailed {
+			breachCount++
+		}
+	}
+	assert.Equal(t, 1, breachCount,
+		"SLA breach timeline event must remain a single entry across replay")
+}
+
+// TestMortgageApplicationWorkflow_SLATimerCancelledOnEarlySignal confirms that
+// when the credit signal arrives within the SLA window the workflow records
+// no breach event and never flips WithinSLA to false.
+func TestMortgageApplicationWorkflow_SLATimerCancelledOnEarlySignal(t *testing.T) {
+	testSuite := &testsuite.WorkflowTestSuite{}
+	env := testSuite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(MortgageApplicationWorkflow)
+	env.RegisterActivity(testActivities)
+
+	input := MortgageApplicationSubmitted{
+		ApplicationID: testApplicationID,
+		ApplicantName: testApplicantName,
+		SubmittedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	// Signal at 5s, well before the 30s SLA. The timer must be cancelled and
+	// no breach state or audit entry must be produced.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(CreditCheckCompletedSignal, CreditCheckCompleted{
+			ApplicationID: testApplicationID,
+			Result:        CreditCheckApproved,
+			CompletedAt:   time.Date(2024, 1, 1, 0, 0, 5, 0, time.UTC),
+		})
+	}, 5*time.Second)
+
+	env.ExecuteWorkflow(MortgageApplicationWorkflow, input)
+
+	assert.True(t, env.IsWorkflowCompleted())
+	assert.NoError(t, env.GetWorkflowError())
+
+	var final MortgageApplication
+	assert.NoError(t, env.GetWorkflowResult(&final))
+
+	if assert.NotNil(t, final.SLAStatus) {
+		assert.Equal(t, SLAStatusWithin, *final.SLAStatus)
+	}
+	if assert.NotNil(t, final.SLABreached) {
+		assert.False(t, *final.SLABreached)
+	}
+	for _, e := range final.Timeline {
+		assert.NotEqual(t, "credit_check_sla", e.Step,
+			"no SLA breach entry expected when signal arrives within SLA")
+	}
+}
+
 // TestMortgageApplicationWorkflow_SLARetryResetsTracking confirms that an
 // operator retry replaces the in-flight SLA tracking and that only the final
 // successful attempt's outcome is persisted.
