@@ -1,4 +1,4 @@
-FROM golang AS dev
+FROM docker.io/library/golang AS dev
 ARG APP
 ARG GIT_COMMIT
 ARG GIT_REPO
@@ -6,14 +6,14 @@ ARG VERSION
 ENV CGO_ENABLED=0
 ENV GOOS=linux
 ENV GOCACHE=/go/.cache
-USER 1000
+ENV HOME=/tmp
 WORKDIR /go/root
-COPY --chown=1000:1000 . .
+COPY . .
 WORKDIR /go/root/apps/$APP
-COPY --from=cosmtrek/air /go/bin/air /go/bin/air
+COPY --from=docker.io/cosmtrek/air /go/bin/air /go/bin/air
 CMD [ "air", "-build.stop_on_error", "true", "-build.send_interrupt", "true", "-build.rerun", "true" ]
 
-FROM golang AS builder
+FROM docker.io/library/golang AS builder
 ARG APP
 ARG GIT_COMMIT
 ARG GIT_REPO
