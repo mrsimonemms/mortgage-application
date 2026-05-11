@@ -9,6 +9,7 @@ services:
     volumes:
       - .:/home/node/root
       - api_node_modules:/home/node/root/apps/api/node_modules
+    working_dir: /home/node/root/apps/api
     command: npm ci
 
   api:
@@ -28,6 +29,7 @@ services:
     volumes:
       - .:/home/node/root
       - api_node_modules:/home/node/root/apps/api/node_modules
+    working_dir: /home/node/root/apps/api
     command: npm run start:dev
     depends_on:
       api-deps:
@@ -50,6 +52,7 @@ services:
     volumes:
       - .:/home/node/root
       - ui_node_modules:/home/node/root/apps/ui/node_modules
+    working_dir: /home/node/root/apps/ui
     command: npm ci
 
   ui:
@@ -68,6 +71,7 @@ services:
     volumes:
       - .:/home/node/root
       - ui_node_modules:/home/node/root/apps/ui/node_modules
+    working_dir: /home/node/root/apps/ui
     command: npm run start:dev
     depends_on:
       ui-deps:

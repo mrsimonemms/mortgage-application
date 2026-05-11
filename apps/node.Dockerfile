@@ -1,12 +1,11 @@
-FROM node:lts AS dev
+FROM docker.io/library/node:lts AS dev
 ARG APP
 ARG GIT_COMMIT
 ARG VERSION
-USER node
 WORKDIR /home/node/root
 ENV GIT_COMMIT="${GIT_COMMIT}"
 ENV VERSION="${VERSION}"
-COPY --chown=node:node . .
+COPY . .
 WORKDIR /home/node/root/apps/$APP
 ENV PORT=3000
 ENV LOGGER_COLORS_ENABLED=true
@@ -15,7 +14,7 @@ ENV LOG_LEVEL=verbose
 EXPOSE 3000
 CMD [ "npm", "run", "start:dev" ]
 
-FROM node:lts-alpine AS builder
+FROM docker.io/library/node:lts-alpine AS builder
 ARG APP
 USER node
 WORKDIR /home/node/root
@@ -24,7 +23,7 @@ WORKDIR /home/node/root/apps/$APP
 RUN npm ci \
   && npm run build
 
-FROM node:lts-alpine
+FROM docker.io/library/node:lts-alpine
 ARG APP
 ARG GIT_COMMIT
 ARG VERSION
